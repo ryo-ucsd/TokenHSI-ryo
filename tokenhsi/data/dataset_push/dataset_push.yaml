@@ -1,0 +1,172 @@
+motions:
+  push:
+  - file: motions/push/Jiaheng_Push_Careful_03_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Careful_03_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Careful_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Careful_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Careful_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Careful_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Heavy_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Heavy_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Netural_03_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Netural_03_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Rush_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Rush_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Rush_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Rush_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Rush_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Rush_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Heavy_04_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Heavy_04_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Wenjia_Push_Rush_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Wenjia_Push_Rush_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Careful_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Careful_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Wenjia_Push_Rush_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Wenjia_Push_Rush_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Wenjia_Push_Careful_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Wenjia_Push_Careful_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Wenjia_Push_Careful_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Wenjia_Push_Careful_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Netural_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Netural_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Wenjia_Push_Tired_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Wenjia_Push_Tired_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Neutral_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Neutral_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Rush_03_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Rush_03_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Heavy_03_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Heavy_03_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Careful_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Careful_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Rush_03_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Rush_03_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Neutral_03_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Neutral_03_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Wenjia_Push_Relaxed_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Wenjia_Push_Relaxed_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Heavy_05_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Heavy_05_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Heavy_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Heavy_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Heavy_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Heavy_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Jiaheng_Push_Neutral_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Jiaheng_Push_Neutral_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Heavy_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Heavy_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Careful_03_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Careful_03_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Wenjia_Push_Tired_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Wenjia_Push_Tired_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Rush_02_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Rush_02_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Netural_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Netural_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Baixuan_Push_Heavy_03_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Baixuan_Push_Heavy_03_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
+  - file: motions/push/Wenjia_Push_Relaxed_01_stageii/ref_motion_smpl.npy
+    interact_range: []
+    obj_file: motions/push/Wenjia_Push_Relaxed_01_stageii/box_motion.npy
+    rsi_skipped_range: []
+    weight: 1.0
