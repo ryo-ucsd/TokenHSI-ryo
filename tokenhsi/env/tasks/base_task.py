@@ -120,6 +120,13 @@ class BaseTask():
             self.gym.viewer_camera_look_at(
                 self.viewer, None, cam_pos, cam_target)
 
+        print("+++++++++++++++++++++++++++++++++++++++++")
+        #print(self.obs_buf.shape)  # should be (num_envs, self._num_obs)
+        #print(self.action_buf.shape)  # (num_envs, self._num_actions)
+            
+        
+
+
     # set gravity based on up axis and return axis index
     def set_sim_params_up_axis(self, sim_params, axis):
         if axis == 'z':

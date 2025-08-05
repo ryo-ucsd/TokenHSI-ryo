@@ -42,10 +42,7 @@ from isaacgym.torch_utils import *
 
 from utils import torch_utils
 
-import matplotlib.pyplot as plt
-
-
-class HumanoidPush(Humanoid):
+class HumanoidTest(Humanoid):
     class StateInit(Enum):
         Default = 0
         Start = 1
@@ -53,7 +50,7 @@ class HumanoidPush(Humanoid):
         Hybrid = 3
 
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
-        self._box_root_ids = []
+
         # configs for task
         self._enable_task_obs = cfg["env"]["enableTaskObs"]
         self._only_vel_reward = cfg["env"]["onlyVelReward"]
@@ -65,8 +62,6 @@ class HumanoidPush(Humanoid):
 
         self._mode = cfg["env"]["mode"] # determine which set of objects to use (train or test)
         assert self._mode in ["train", "test"]
-
-        
 
         if cfg["args"].eval:
             self._mode = "test"
@@ -83,7 +78,6 @@ class HumanoidPush(Humanoid):
         self._build_random_density = box_cfg["build"]["randomDensity"]
         self._build_test_sizes = box_cfg["build"]["testSizes"]
 
-
         self._reset_random_rot = box_cfg["reset"]["randomRot"]
         self._reset_random_height = box_cfg["reset"]["randomHeight"]
         self._reset_random_height_prob = box_cfg["reset"]["randomHeightProb"]
@@ -91,23 +85,9 @@ class HumanoidPush(Humanoid):
 
         self._enable_bbox_obs = box_cfg["obs"]["enableBboxObs"]
 
-        # ----- Reward config ------------------------------------------
-        env_cfg  = cfg["env"]
-        rew_cfg  = env_cfg["reward"]["push"]
-        self._tar_box_pos         = torch.tensor(rew_cfg["targetBoxPos"],
-                                                 dtype=torch.float32,
-                                                 device=torch.device(device_type, device_id))
-        self._only_vel_reward     = rew_cfg.get("onlyVelReward", False)
-        self._debug_vel           = rew_cfg.get("debugVel", False)
-        self._vel_pen_thre        = rew_cfg.get("boxVelPenaltyThre", 99.0)
-        self._vel_pen_coeff       = rew_cfg.get("boxVelPenCoeff", 0.0)
-        
-
-
-
         # configs for amp
         state_init = cfg["env"]["stateInit"]
-        self._state_init = HumanoidPush.StateInit[state_init]
+        self._state_init = HumanoidCarry.StateInit[state_init]
         self._hybrid_init_prob = cfg["env"]["hybridInitProb"]
         self._num_amp_obs_steps = cfg["env"]["numAMPObsSteps"]
         assert(self._num_amp_obs_steps >= 2)
@@ -119,22 +99,6 @@ class HumanoidPush(Humanoid):
 
         self._power_reward = cfg["env"]["power_reward"]
         self._power_coefficient = cfg["env"]["power_coefficient"]
-        self._power_dof_ids = [
-            0, 1, 2, # abdomen
-            3, 4, 5, # neck
-            6, 7, 8, # right_shoulder
-            9, # right_elbow
-            10, 11, 12, # left_shoulder
-            13, # left_elbow
-            14, 15, 16, # right_hip
-            17, 18, 19, # right_knee
-            20, 21, 22, # right_ankle
-            23, 24, 25, # left_hip
-            26, 27, 28, # left_knee
-            29, 30, 31, # left_ankle
-        ]
-
-        #self._print_power_reward = cfg["env"]["print_power_reward"]
 
         super().__init__(cfg=cfg,
                          sim_params=sim_params,
@@ -143,16 +107,12 @@ class HumanoidPush(Humanoid):
                          device_id=device_id,
                          headless=headless)
         
-        self._power_dof_ids = to_torch(self._power_dof_ids, device=self.device, dtype=torch.long)
-        
         self._skill = cfg["env"]["skill"]
         self._skill_init_prob = torch.tensor(cfg["env"]["skillInitProb"], device=self.device, dtype=torch.float) # probs for state init
         self._skill_disc_prob = torch.tensor(cfg["env"]["skillDiscProb"], device=self.device, dtype=torch.float) # probs for amp obs demo fetch
 
-        # --------- load motion YAML via MotionLib -------------------------
         motion_file = cfg['env']['motion_file']
         self._load_motion(motion_file)
-        self._push_lib = self._motion_lib["push"]
 
         self._amp_obs_buf = torch.zeros((self.num_envs, self._num_amp_obs_steps, self._num_amp_obs_per_step), device=self.device, dtype=torch.float)
         self._curr_amp_obs_buf = self._amp_obs_buf[:, 0]
@@ -164,18 +124,16 @@ class HumanoidPush(Humanoid):
         self._prev_root_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float)
         self._prev_box_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float)
         self._tar_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float) # target location of the box, 3d xyz
-        self._box_init_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float)
-
 
         spacing = cfg["env"]["envSpacing"]
         if spacing <= 0.5:
             self._tar_pos_dist = torch.distributions.uniform.Uniform(
-                torch.tensor([-4.5, 0.0, 0.5], device=self.device),
-                torch.tensor([4.5, 1.0, 1.0], device=self.device))
+                torch.tensor([-4.5, -4.5, 0.5], device=self.device),
+                torch.tensor([4.5, 4.5, 1.0], device=self.device))
         else:
             self._tar_pos_dist = torch.distributions.uniform.Uniform(
-                torch.tensor([-(spacing - 0.5), 0.0, 0.5], device=self.device),
-                torch.tensor([(spacing - 0.5), 1.0, 1.0], device=self.device))
+                torch.tensor([-(spacing - 0.5), -(spacing - 0.5), 0.5], device=self.device),
+                torch.tensor([(spacing - 0.5), (spacing - 0.5), 1.0], device=self.device))
 
         if (not self.headless):
             self._build_marker_state_tensors()
@@ -206,63 +164,6 @@ class HumanoidPush(Humanoid):
             self._skill_init_prob = torch.tensor(cfg["env"]["eval"]["skillInitProb"], device=self.device, dtype=torch.float) # probs for state init
 
         return
-
-     # ════════════════════════════════════════════════════════════════
-    #   Environment Construction
-    # ════════════════════════════════════════════════════════════════
-    # def _load_env(self, env_id, env_ptr):
-    #     """Build humanoid first (super), then attach the push-box."""
-    #     super()._load_env(env_id, env_ptr)
-
-    #     if env_id == 0:
-    #         self._load_push_asset()
-
-    #     self._build_push_object(env_id, env_ptr)
-
-    # ------------------------------------------------------------------
-    # def _load_push_asset(self):
-    #     """Create a 1×1×1 cube asset; scale per-environment later."""
-    #     opts                 = gymapi.AssetOptions()
-    #     opts.density         = 20.0
-    #     opts.fix_base_link   = False
-    #     opts.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-    #     self._box_asset      = self.gym.create_box(self.sim, 1.0, 1.0, 1.0, opts)
-
-    #     # Decide size for every env
-    #     self._box_scale = torch.ones((self.num_envs, 3), device=self.device)
-    #     if self._build_random_size:
-    #         self._box_scale[:, 0] = self._sample_1d(self.num_envs, self._x_range, self._x_interval)
-    #         self._box_scale[:, 1] = self._sample_1d(self.num_envs, self._y_range, self._y_interval)
-    #         self._box_scale[:, 2] = self._sample_1d(self.num_envs, self._z_range, self._z_interval)
-    #     else:
-    #         fixed = torch.tensor(self._test_sizes[0], device=self.device)
-    #         self._box_scale[:] = fixed
-    #     self._box_size = self._box_scale.clone()
-
-    # ------------------------------------------------------------------
-    # def _build_push_object(self, env_id, env_ptr):
-    #     pose         = gymapi.Transform()
-    #     pose.p.x     = 0.4
-    #     pose.p.y     = 0.0
-    #     pose.p.z     = self._box_size[env_id, 2].item() / 2.0
-
-    #     handle = self.gym.create_actor(env_ptr, self._box_asset, pose,
-    #                                    f"box_{env_id}", env_id, env_id, 0)
-    #     self.gym.set_actor_scale(env_ptr, handle,
-    #                              float(max(self._box_size[env_id]).item()))
-        
-    #     root_id = self.gym.get_actor_index(env_ptr, handle, gymapi.DOMAIN_SIM)
-    #     # grow the list exactly once per env
-    #     if len(self._box_root_ids) <= env_id:
-    #         self._box_root_ids.append(root_id)
-    #     else:
-    #         self._box_root_ids[env_id] = root_id
-    #     if env_id == 0:
-    #         self._box_handles = []
-    #     self._box_handles.append(handle)
-
-
-
     
     def _create_envs(self, num_envs, spacing, num_per_row):
         if (not self.headless):
@@ -373,7 +274,7 @@ class HumanoidPush(Humanoid):
             dist = torch.distributions.uniform.Uniform(torch.tensor([300.0], device=self.device), torch.tensor([800.0], device=self.device))
             self._box_density = dist.sample((self.num_envs,))
         else:
-            self._box_density[:] = 1.0
+            self._box_density[:] = 100.0
 
         self._box_size = torch.tensor(self._build_base_size, device=self.device).reshape(1, 3) * self._box_scale # (num_envs, 3)
 
@@ -409,7 +310,7 @@ class HumanoidPush(Humanoid):
         segmentation_id = 0
 
         default_pose = gymapi.Transform()
-        default_pose.p.x = self._box_size[env_id, 0] / 2 + 2.0
+        default_pose.p.x = self._box_size[env_id, 0] / 2 + 0.4
         default_pose.p.y = 0
         default_pose.p.z = self._box_size[env_id, 2] / 2 # ensure no penetration between box and ground plane
     
@@ -455,10 +356,8 @@ class HumanoidPush(Humanoid):
 
     def _build_box_tensors(self):
         num_actors = self.get_num_actors_per_env()
-        
         self._box_states = self._root_states.view(self.num_envs, num_actors, self._root_states.shape[-1])[..., 1, :]
-        #print(self._box_states.shape)
-
+        
         self._box_actor_ids = to_torch(num_actors * np.arange(self.num_envs), device=self.device, dtype=torch.int32) + 1
 
         self._initial_box_states = self._box_states.clone()
@@ -536,53 +435,52 @@ class HumanoidPush(Humanoid):
     def _reset_task(self, env_ids):
 
         # for skill is putDown, the target location of the box is from the reference box motion
-        # for sk_name in ["putDown"]:
-        #     if self._reset_ref_env_ids.get(sk_name) is not None:
-        #         if (len(self._reset_ref_env_ids[sk_name]) > 0):
+        for sk_name in ["putDown"]:
+            if self._reset_ref_env_ids.get(sk_name) is not None:
+                if (len(self._reset_ref_env_ids[sk_name]) > 0):
 
-        #             curr_env_ids = self._reset_ref_env_ids[sk_name]
+                    curr_env_ids = self._reset_ref_env_ids[sk_name]
 
-        #             root_pos, root_rot = self._motion_lib[sk_name].get_obj_motion_state(
-        #                 motion_ids=self._reset_ref_motion_ids[sk_name], 
-        #                 motion_times=self._motion_lib[sk_name].get_motion_length(self._reset_ref_motion_ids[sk_name]) # use last frame
-        #             )
+                    root_pos, root_rot = self._motion_lib[sk_name].get_obj_motion_state(
+                        motion_ids=self._reset_ref_motion_ids[sk_name], 
+                        motion_times=self._motion_lib[sk_name].get_motion_length(self._reset_ref_motion_ids[sk_name]) # use last frame
+                    )
 
-        #             root_pos[:, 2] = self._box_size[curr_env_ids, 2] / 2 # make tar pos 100% on the ground
-        #             self._tar_pos[curr_env_ids] = root_pos
+                    root_pos[:, 2] = self._box_size[curr_env_ids, 2] / 2 # make tar pos 100% on the ground
+                    self._tar_pos[curr_env_ids] = root_pos
 
-        #             # reset tar platform
-        #             if self._reset_random_height:
-        #                 self._tar_platform_pos[curr_env_ids] = self._tar_platform_default_pos[curr_env_ids]
+                    # reset tar platform
+                    if self._reset_random_height:
+                        self._tar_platform_pos[curr_env_ids] = self._tar_platform_default_pos[curr_env_ids]
 
         # for skill is loco, pickUp, carryWith, and reset default, we random generate an target location of the box
         random_env_ids = []
         if len(self._reset_default_env_ids) > 0:
             random_env_ids.append(self._reset_default_env_ids)
-        for sk_name in ["push"]:
+        for sk_name in ["loco", "pickUp", "carryWith"]:
             if self._reset_ref_env_ids.get(sk_name) is not None:
                 random_env_ids.append(self._reset_ref_env_ids[sk_name])
 
         if len(random_env_ids) > 0:
             ids = torch.cat(random_env_ids, dim=0)
 
-            new_target_pos = torch.add(self._humanoid_root_states[ids, :3], torch.tensor([5,0,0], device=self.device))
-            
+            new_target_pos = self._tar_pos_dist.sample((len(ids),))
             new_target_pos[:, 2] = self._box_size[ids, 2] / 2 # place the box on the ground
 
             min_dist = 1.0
 
             # check if the new pos is too close to character or box
-            # target_overlap = torch.logical_or(
-            #     torch.sum((new_target_pos[..., :2] - self._humanoid_root_states[ids, :2]) ** 2, dim=-1) < min_dist,
-            #     torch.sum((new_target_pos[..., :2] - self._box_states[ids, :2]) ** 2, dim=-1) < min_dist
-            # )
-            # while(torch.sum(target_overlap) > 0):
-            #     new_target_pos[target_overlap] = self._tar_pos_dist.sample((torch.sum(target_overlap),))
-            #     new_target_pos[:, 2] = self._box_size[ids, 2] / 2 # place the box on the ground
-            #     target_overlap = torch.logical_or(
-            #         torch.sum((new_target_pos[..., :2] - self._humanoid_root_states[ids, :2]) ** 2, dim=-1) < min_dist,
-            #         torch.sum((new_target_pos[..., :2] - self._box_states[ids, :2]) ** 2, dim=-1) < min_dist
-            #     )
+            target_overlap = torch.logical_or(
+                torch.sum((new_target_pos[..., :2] - self._humanoid_root_states[ids, :2]) ** 2, dim=-1) < min_dist,
+                torch.sum((new_target_pos[..., :2] - self._box_states[ids, :2]) ** 2, dim=-1) < min_dist
+            )
+            while(torch.sum(target_overlap) > 0):
+                new_target_pos[target_overlap] = self._tar_pos_dist.sample((torch.sum(target_overlap),))
+                new_target_pos[:, 2] = self._box_size[ids, 2] / 2 # place the box on the ground
+                target_overlap = torch.logical_or(
+                    torch.sum((new_target_pos[..., :2] - self._humanoid_root_states[ids, :2]) ** 2, dim=-1) < min_dist,
+                    torch.sum((new_target_pos[..., :2] - self._box_states[ids, :2]) ** 2, dim=-1) < min_dist
+                )
 
             if self._reset_random_height:
                 num_envs = ids.shape[0]
@@ -779,124 +677,33 @@ class HumanoidPush(Humanoid):
             obs = torch.cat([obs, box_mass.unsqueeze(-1)], dim=-1)
 
         return obs
-    
-    # def post_physics_step(self):
-    #     super().post_physics_step()
-
-    #     self._fetch_box_states()
-    #     self._update_hist_amp_obs()
-    #     self._compute_amp_observations()
-
-    #     self._compute_rewards()
-
-    #     # for trainer
-    #     self.extras["amp_obs"]    = self._amp_obs_buf.view(-1, self.get_num_amp_obs())
-    #     self.extras["policy_obs"] = self.obs_buf.clone()
-    def compute_contact_reward(self, box_pos, right_hand, left_hand):
-
-        #xy distance between hands and the boxes
-        right_hand_dist_xy = torch.norm(box_pos[:, :2] - right_hand[:, :2], dim=1)
-        left_hand_dist_xy = torch.norm(box_pos[:, :2] - left_hand[:, :2], dim=1)
-
-
-        r_contant_rew = torch.exp(-0.5 * (right_hand_dist_xy - (self._box_size[:, 0] / 2)))
-        l_contant_rew = torch.exp(-0.5 * (left_hand_dist_xy - (self._box_size[:, 0] / 2)))
-
-        # print("right hand")
-        # print(r_contant_rew)
-        # print("left hand")
-        # print(l_contant_rew)
-
-        return l_contant_rew + r_contant_rew
-        
 
     def _compute_reward(self, actions):
-        box_pos = self._box_states[:, 0:3]
-        prev_pos = self._prev_box_pos[:, 0:3]
-        box_vel = (box_pos - prev_pos) / self.dt  # Box velocity (m/s)
         root_pos = self._humanoid_root_states[..., 0:3]
-        #right hand id = 5
-        #left hand id = 8
-        right_hand_pos = self._rigid_body_pos[..., 5, 0:3]
-        left_hand_pos = self._rigid_body_pos[..., 8, 0:3]
+        root_rot = self._humanoid_root_states[..., 3:7]
+        rigid_body_pos = self._rigid_body_pos
+        box_pos = self._box_states[..., 0:3]
+        box_rot = self._box_states[..., 3:7]
+        hands_ids = self._key_body_ids[[0, 1]]
 
-        # print("right hand pos")
-        # print(right_hand_pos)
-        # print("left hand pos")
-        # print(left_hand_pos)
+        walk_r = compute_walk_reward(root_pos, self._prev_root_pos, box_pos, self.dt, 1.5,
+                                     self._only_vel_reward, self.cfg["env"]["debug"]["vel"])
+        carry_r = compute_carry_reward(box_pos, self._prev_box_pos, self._tar_pos, self.dt, 1.5, self._box_size, 
+                                       self._only_vel_reward,
+                                       self._box_vel_penalty, self._box_vel_pen_coeff, self._box_vel_pen_thre,
+                                       self.cfg["env"]["debug"]["vel"])
+        handheld_r = compute_handheld_reward(rigid_body_pos, box_pos, hands_ids, self._tar_pos, self._only_height_handheld_reward)
+        putdown_r = compute_putdown_reward(box_pos, self._tar_pos)
+        carry_box_reward = walk_r + carry_r + handheld_r + putdown_r
 
-        # print(right_hand_pos.shape)
-        # print(left_hand_pos.shape)
-        # print(root_pos.shape)
-
-        power = torch.abs(torch.multiply(self.dof_force_tensor[:, self._power_dof_ids], self._dof_vel[:, self._power_dof_ids])).sum(dim = -1)
+        power = torch.abs(torch.multiply(self.dof_force_tensor, self._dof_vel)).sum(dim = -1)
         power_reward = -self._power_coefficient * power
 
-        contact_rew = self.compute_contact_reward(box_pos,right_hand_pos, left_hand_pos)
-        # 1. Main reward: Distance from initial position (encourage pushing away)
-        box2init_dist =  torch.sum((self._box_init_pos[..., 0:2] - box_pos[..., 0:2]) ** 2, dim=-1).sqrt()
-        r2 = box2init_dist ** 2
-        push_reward = torch.clamp_max(r2, 1.0)  # Directly reward distance moved
+        if self._power_reward:
+            self.rew_buf[:] = carry_box_reward + power_reward
+        else:
+            self.rew_buf[:] = carry_box_reward
 
-        # box2init_dist = torch.norm(box_pos[..., :2] - self._box_init_pos[..., :2], dim=-1)
-        # push_reward = box2init_dist  # Directly reward distance moved
-
-        # 2. Penalize box tilting (avoid flipping)
-        box_rot = self._box_states[:, 3:7]  # Quaternion [ x, y, z, w]
-        tilt_penalty = 1.0 - torch.abs(box_rot[:, 3])
-        tilt_penalty2 = 0.0 - torch.abs(box_rot[:, 1])
-        tilt_penalty3 = 0.0 - torch.abs(box_rot[:, 2])
-
-        vel       = (box_pos - prev_pos) / self.dt          # (N,3)
-
-        to_tar    = self._tar_box_pos.unsqueeze(0) - box_pos
-        dist      = torch.norm(to_tar, dim=-1)
-        unit_dir  = torch.where(dist.unsqueeze(-1) > 1e-6,
-                                to_tar / dist.unsqueeze(-1),
-                                torch.zeros_like(to_tar))
-        forward_v = torch.sum(vel * unit_dir, dim=-1)
-
-        # print("dist")
-        # print(dist)
-
-        push_rew  = 1.0 / (1.0 + dist) + forward_v
-        
-        # print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-        # print(box_rot)
-
-        # 3. Keep humanoid near the box (avoid hit-and-run)
-        human2box_dist = torch.norm(root_pos[..., :2] - box_pos[..., :2], dim=-1)
-        proximity_reward = torch.exp(-0.5 * human2box_dist)  # 1 if very close, decays with distance
-
-        # 4. Penalize excessive box velocity (avoid unrealistic hits)
-        box_speed = torch.norm(box_vel[..., :2], dim=-1)  # Only care about horizontal speed
-        vel_penalty = torch.where(
-            box_speed > 1.5,  # If box moves >2 m/s, penalize (adjust threshold)
-            (box_speed - 1.0) * 0.1,  # Scale penalty
-            torch.zeros_like(box_speed)
-        )
-
-        # 5. Success condition: Box moved >1m from start (2D distance)
-        success = box2init_dist > 1.0
-        success_bonus = success.float() * 0.1  # Large bonus on success
-
-        # Final reward (adjust weights as needed)
-        reward = (
-            0.7 * push_rew +      # Main push incentive
-            0.3 * contact_rew  # Keep touching the box with hands
-            + power_reward       
-        )
-
-        #print(reward)
-
-        # Update buffers
-        self.rew_buf[:] = reward
-        self.reset_buf = torch.where(success, torch.ones_like(self.reset_buf), self.reset_buf)
-        self.extras["success"] = success.float().mean()
-
-        # Store previous states
-        self._prev_box_pos.copy_(box_pos)
-        self._prev_root_pos.copy_(root_pos)
         return
 
     def _compute_reset(self):
@@ -915,26 +722,77 @@ class HumanoidPush(Humanoid):
     
     def _reset_boxes(self, env_ids):
 
-        # for skill is omomo, carryWith, the initial location of the box is from the reference box motion
-        for sk_name in ["push"]:
+        # for skill is pickUp, carryWith, putDown, the initial location of the box is from the reference box motion
+        for sk_name in ["pickUp", "carryWith", "putDown"]:
             if self._reset_ref_env_ids.get(sk_name) is not None:
                 if (len(self._reset_ref_env_ids[sk_name]) > 0):
 
                     curr_env_ids = self._reset_ref_env_ids[sk_name]
 
-                    root_pos = self._box_size[curr_env_ids].clone() / 2 # on the ground
-                    root_pos[:, 1] = self._humanoid_root_states[curr_env_ids, 1] # y
+                    root_pos, root_rot = self._motion_lib[sk_name].get_obj_motion_state(
+                        motion_ids=self._reset_ref_motion_ids[sk_name], 
+                        motion_times=self._reset_ref_motion_times[sk_name]
+                    )
 
-                    max_x_coord = self._kinematic_humanoid_rigid_body_states[curr_env_ids, :, 0].max(dim=-1)[0]
-                    root_pos[:, 0] += max_x_coord + 0.5 # 先走过去，再击打 walk over first, then hit
+                    on_ground_mask = (self._box_size[curr_env_ids, 2] / 2 > root_pos[:, 2])
+                    root_pos[on_ground_mask, 2] = self._box_size[curr_env_ids[on_ground_mask], 2] / 2
 
                     self._box_states[curr_env_ids, 0:3] = root_pos
-                    self._box_states[curr_env_ids, 3:7] = 0.0
-                    self._box_states[curr_env_ids, 6] = 1.0 # quaternion
+                    self._box_states[curr_env_ids, 3:7] = root_rot
                     self._box_states[curr_env_ids, 7:10] = 0.0
                     self._box_states[curr_env_ids, 10:13] = 0.0
 
-                    self._box_init_pos[curr_env_ids, :] = root_pos
+                    # reset platform, we needn't platforms right now.
+                    if self._reset_random_height:
+                        self._platform_pos[curr_env_ids] = self._platform_default_pos[curr_env_ids]
+
+        # for skill is loco and reset default, we random generate an inital location of the box
+        random_env_ids = []
+        if len(self._reset_default_env_ids) > 0:
+            random_env_ids.append(self._reset_default_env_ids)
+        for sk_name in ["loco"]:
+            if self._reset_ref_env_ids.get(sk_name) is not None:
+                random_env_ids.append(self._reset_ref_env_ids[sk_name])
+
+        if len(random_env_ids) > 0:
+            ids = torch.cat(random_env_ids, dim=0)
+
+            root_pos_xy = torch.randn(len(ids), 2, device=self.device)
+            root_pos_xy /= torch.linalg.norm(root_pos_xy, dim=-1, keepdim=True)
+            root_pos_xy *= torch.rand(len(ids), 1, device=self.device) * 9.0 + 1.0 # randomize
+            root_pos_xy += self._humanoid_root_states[ids, :2] # get absolute pos, humanoid_root_state will be updated after set_env_state
+
+            root_pos_z = self._box_size[ids, 2] / 2 # place the box on the ground
+            if self._reset_random_height:
+
+                num_envs = ids.shape[0]
+                probs = to_torch(np.array([self._reset_random_height_prob] * num_envs), device=self.device)
+                mask = torch.bernoulli(probs) == 1.0
+                
+                if mask.sum() > 0:
+                    root_pos_z[mask] += torch.rand(mask.sum(), device=self.device) * 1.0
+                    root_pos_z[mask] = self._regulate_height(root_pos_z[mask], self._box_size[ids[mask]])
+
+            axis = torch.tensor([[0.0, 0.0, 1.0]], device=self.device).reshape(1, 3).expand([ids.shape[0], -1])
+            if self._reset_random_rot:
+                coeff = 1.0
+            else:
+                coeff = 0.0
+            ang = torch.rand((len(ids),), device=self.device) * 2 * np.pi * coeff
+            root_rot = quat_from_angle_axis(ang, axis)
+            root_pos = torch.cat([root_pos_xy, root_pos_z.unsqueeze(-1)], dim=-1)
+
+            self._box_states[ids, 0:3] = root_pos
+            self._box_states[ids, 3:7] = root_rot
+            self._box_states[ids, 7:10] = 0.0
+            self._box_states[ids, 10:13] = 0.0
+
+            # we need to reset this here
+            if self._reset_random_height:
+                self._platform_pos[ids, 0:2] = root_pos[:, 0:2] # xy
+                self._platform_pos[ids, -1] = root_pos[:, -1] - self._box_size[ids, 2] / 2 - self._platform_height / 2
+
+                self._box_states[ids, 2] += 0.05 # add 0.05 to enable correct collision detection
 
         return
     
@@ -1088,68 +946,14 @@ class HumanoidPush(Humanoid):
             self._init_amp_obs(env_ids)
 
         return
-    
-    #  # ------------------------------------------------------------------
-    # def _reset_boxes(self, env_ids, ref_pos, ref_rot):
-    #     """
-    #     env_ids : 1‑D tensor of environment indices being reset
-    #     ref_pos / ref_rot : (len(env_ids), 3/4) tensors from MotionLib
-    #                         (already on self.device)
-    #     """
-
-    #     # ------------------------------------------------------------------
-    #     # 1. Decide the initial pose for every env being reset
-    #     # ------------------------------------------------------------------
-    #     root_pos = ref_pos.clone()
-    #     root_rot = ref_rot.clone()
-
-    #     # --- ensure the box sits on (or above) the ground -----------------
-    #     z_min = self._box_size[env_ids, 2] * 0.5
-    #     root_pos[:, 2] = torch.maximum(root_pos[:, 2], z_min)
-
-    #     # If you want additional randomisation (like Carry’s loco branch),
-    #     # insert it here – e.g. jitter xy by ±1 m, random yaw, etc.
-    #     # --------------------------------------------------------------
-
-    #     # ------------------------------------------------------------------
-    #     # 2. Build an (N,13) root‑state tensor [pos(3), quat(4), linVel(3), angVel(3)]
-    #     # ------------------------------------------------------------------
-    #     N = len(env_ids)
-    #     root_states = torch.zeros((N, 13), device=self.device, dtype=torch.float32)
-    #     root_states[:, 0:3] = root_pos
-    #     root_states[:, 3:7] = root_rot
-    #     # linear / angular velocity already zero
-
-    #     # ------------------------------------------------------------------
-    #     # 3. Push the new states into the simulator
-    #     # ------------------------------------------------------------------
-    #     # We stored each box’s global root‑state index when the actor was created:
-    #     # self._box_root_ids[eid]  ← see _build_push_object()
-    #     try:
-    #         indices = torch.tensor([self._box_root_ids[e] for e in env_ids],
-    #                         device=self.device, dtype=torch.int32)
-    #     except:
-    #         pass
-
-    #     self.gym.set_actor_root_state_tensor_indexed(
-    #         self.sim,
-    #         gymtorch.unwrap_tensor(root_states),
-    #         gymtorch.unwrap_tensor(indices),
-    #         N
-    #     )
-
-    #     # ------------------------------------------------------------------
-    #     # 4. Update task‑side buffers so reward/obs code sees the new pose
-    #     # ------------------------------------------------------------------
-    #     self._box_states[env_ids] = root_states
 
     def _reset_actors(self, env_ids):
-        if (self._state_init == HumanoidPush.StateInit.Default):
+        if (self._state_init == HumanoidCarry.StateInit.Default):
             self._reset_default(env_ids)
-        elif (self._state_init == HumanoidPush.StateInit.Start
-              or self._state_init == HumanoidPush.StateInit.Random):
+        elif (self._state_init == HumanoidCarry.StateInit.Start
+              or self._state_init == HumanoidCarry.StateInit.Random):
             self._reset_ref_state_init(env_ids)
-        elif (self._state_init == HumanoidPush.StateInit.Hybrid):
+        elif (self._state_init == HumanoidCarry.StateInit.Hybrid):
             self._reset_hybrid_state_init(env_ids)
         else:
             assert(False), "Unsupported state initialization strategy: {:s}".format(str(self._state_init))
@@ -1179,10 +983,10 @@ class HumanoidPush(Humanoid):
                 num_envs = curr_env_ids.shape[0]
                 motion_ids = curr_motion_lib.sample_motions(num_envs)
 
-                if (self._state_init == HumanoidPush.StateInit.Random
-                    or self._state_init == HumanoidPush.StateInit.Hybrid):
+                if (self._state_init == HumanoidCarry.StateInit.Random
+                    or self._state_init == HumanoidCarry.StateInit.Hybrid):
                     motion_times = curr_motion_lib.sample_time_rsi(motion_ids) # avoid times with serious self-penetration
-                elif (self._state_init == HumanoidPush.StateInit.Start):
+                elif (self._state_init == HumanoidCarry.StateInit.Start):
                     motion_times = torch.zeros(num_envs, device=self.device)
                 else:
                     assert(False), "Unsupported state initialization strategy: {:s}".format(str(self._state_init))
@@ -1304,24 +1108,6 @@ class HumanoidPush(Humanoid):
                                                                    self._dof_obs_size, self._dof_offsets)
         return
 
- # ════════════════════════════════════════════════════════════════
-    #   Helper utilities
-    # ════════════════════════════════════════════════════════════════
-    # @staticmethod
-    # def _sample_1d(n, range_, interval):
-    #     lo, hi = range_
-    #     grid   = torch.arange(lo, hi + 1e-6, interval)
-    #     return grid[torch.randint(0, len(grid), (n,))].float()
-
-    # def _fetch_box_states(self):
-    #     """Read root-state (0) of each box actor."""
-    #     states = []
-    #     for env_id in range(self.num_envs):
-    #         rb = self.gym.get_actor_rigid_body_states(
-    #                 self.envs[env_id], self._box_handles[env_id],
-    #                 gymapi.STATE_ALL)[0]       # only root link
-    #         states.append(gymtorch.wrap_tensor(rb))
-    #     self._box_states = torch.stack(states, dim=0)
 
 #####################################################################
 ###=========================jit functions=========================###

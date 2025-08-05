@@ -206,7 +206,7 @@ class BoxLib():
 
         return
 
-class HumanoidTrajSitCarryClimb(Humanoid):
+class HumanoidTrajSitCarryClimbPush(Humanoid):
     class StateInit(Enum):
         Default = 0
         Start = 1
@@ -218,6 +218,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         sit = 1
         carry = 2
         climb = 3
+        push = 4
 
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
 
@@ -242,13 +243,14 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self.register_task_sit_pre_init(cfg)
         self.register_task_carry_pre_init(cfg)
         self.register_task_climb_pre_init(cfg)
+        self.register_task_push_pre_init(cfg)
 
         # task-specific conditional disc
         self._enable_task_specific_disc = cfg["env"]["enableTaskSpecificDisc"]
 
         # configs for amp
         state_init = cfg["env"]["stateInit"]
-        self._state_init = HumanoidTrajSitCarryClimb.StateInit[state_init]
+        self._state_init = HumanoidTrajSitCarryClimbPush.StateInit[state_init]
         self._hybrid_init_prob = cfg["env"]["hybridInitProb"]
         self._num_amp_obs_steps = cfg["env"]["numAMPObsSteps"]
         assert(self._num_amp_obs_steps >= 2)
@@ -285,6 +287,8 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         # tensors for task
         self._prev_root_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float)
         self._prev_root_rot = torch.zeros([self.num_envs, 4], device=self.device, dtype=torch.float)
+        self._box_init_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float)
+        self._push_box_init_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float)
 
         self._task_init_prob = torch.tensor(cfg["env"]["taskInitProb"], device=self.device, dtype=torch.float) # probs for task init
         self._task_indicator = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
@@ -321,6 +325,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self.register_task_sit_post_init(cfg)
         self.register_task_carry_post_init(cfg)
         self.register_task_climb_post_init(cfg)
+        self.register_task_push_post_init(cfg)
         self.post_process_disc_dataset_collection(cfg)
 
         # tensors for enableTrackInitState
@@ -333,7 +338,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
     
     def register_task_traj_pre_init(self, cfg):
         k = "traj"
-        assert HumanoidTrajSitCarryClimb.TaskUID[k].value >= 0
+        assert HumanoidTrajSitCarryClimbPush.TaskUID[k].value >= 0
 
         self._num_traj_samples = cfg["env"][k]["numTrajSamples"]
         self._traj_sample_timestep = cfg["env"][k]["trajSampleTimestep"]
@@ -378,7 +383,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
     
     def register_task_sit_pre_init(self, cfg):
         k = "sit"
-        assert HumanoidTrajSitCarryClimb.TaskUID[k].value >= 0
+        assert HumanoidTrajSitCarryClimbPush.TaskUID[k].value >= 0
 
         self._sit_rwd_vel_penalty = cfg["env"][k]["sit_vel_penalty"]
         self._sit_rwd_vel_pen_coeff = cfg["env"][k]["sit_vel_pen_coeff"]
@@ -431,7 +436,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
     
     def register_task_carry_pre_init(self, cfg):
         k = "carry"
-        assert HumanoidTrajSitCarryClimb.TaskUID[k].value >= 0
+        assert HumanoidTrajSitCarryClimbPush.TaskUID[k].value >= 0
 
         self._carry_rwd_only_vel_reward = cfg["env"][k]["onlyVelReward"]
         self._carry_rwd_only_height_handheld_reward = cfg["env"][k]["onlyHeightHandHeldReward"]
@@ -503,7 +508,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
     
     def register_task_climb_pre_init(self, cfg):
         k = "climb"
-        assert HumanoidTrajSitCarryClimb.TaskUID[k].value >= 0
+        assert HumanoidTrajSitCarryClimbPush.TaskUID[k].value >= 0
 
         self._num_tasks += 1
         self._each_subtask_obs_size.append(3 + 8 * 3) # target root position, object bps
@@ -550,6 +555,56 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self._initial_climb_object_states = self._climb_object_states.clone()
         self._initial_climb_object_states[:, 7:13] = 0
 
+        return
+
+    def register_task_push_pre_init(self, cfg):
+        k = "push"
+        assert HumanoidTrajSitCarryClimbPush.TaskUID[k].value >= 0
+
+
+        self._push_reset_random_rot = cfg["env"][k]["box"]["reset"]["randomRot"]
+        self._push_reset_random_height = cfg["env"][k]["box"]["reset"]["randomHeight"]
+        self._push_reset_random_height_prob = cfg["env"][k]["box"]["reset"]["randomHeightProb"]
+        self._push_reset_maxTopSurfaceHeight = cfg["env"][k]["box"]["reset"]["maxTopSurfaceHeight"]
+
+        self._num_tasks += 1
+        self._each_subtask_obs_size.append(3 + 6 + 3 + 3 + 8 * 3) # box state: pos (3) + rot (6) + lin vel (3) + ang vel (6), bps
+        self._multiple_task_names.append(k)
+
+        return
+    
+    def register_task_push_post_init(self, cfg):
+        k = "push"
+
+        self._push_skill = cfg["env"][k]["skill"]
+        self._push_skill_init_prob = torch.tensor(cfg["env"][k]["skillInitProb"], device=self.device, dtype=torch.float)
+
+        self._push_box_tar_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float) # target location of the box, 3d xyz
+
+        if self._is_eval:
+            self._push_skill = cfg["env"][k]["eval"]["skill"]
+            self._push_skill_init_prob = torch.tensor(cfg["env"][k]["eval"]["skillInitProb"], device=self.device, dtype=torch.float)
+
+        # spacing = cfg["env"]["envSpacing"]
+        # if spacing <= 0.5:
+        #     self._box_tar_pos_dist = torch.distributions.uniform.Uniform(
+        #         torch.tensor([-4.5, -4.5, 0.5], device=self.device),
+        #         torch.tensor([4.5, 4.5, 1.0], device=self.device))
+        # else:
+        #     self._box_tar_pos_dist = torch.distributions.uniform.Uniform(
+        #         torch.tensor([-(spacing - 0.5), -(spacing - 0.5), 0.5], device=self.device),
+        #         torch.tensor([(spacing - 0.5), (spacing - 0.5), 1.0], device=self.device))
+
+        self._prev_push_box_pos = torch.zeros([self.num_envs, 3], device=self.device, dtype=torch.float)
+
+        num_actors = self.get_num_actors_per_env()
+        idx = self._box_handles_push[0]
+        self._push_box_states = self._root_states.view(self.num_envs, num_actors, self._root_states.shape[-1])[..., idx, :]
+        
+        self._push_box_actor_ids = self._humanoid_actor_ids + idx
+
+        self._initial_push_box_states = self._push_box_states.clone()
+        self._initial_push_box_states[:, 7:13] = 0
         return
     
     def post_process_disc_dataset_collection(self, cfg):
@@ -620,6 +675,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self._prev_root_pos[:] = self._humanoid_root_states[..., 0:3]
         self._prev_root_rot[:] = self._humanoid_root_states[..., 3:7]
         self._prev_box_pos[:] = self._box_states[..., 0:3]
+        self._prev_push_box_pos[:] = self._push_box_states[..., 0:3]
         return
 
     def _update_marker(self):
@@ -627,13 +683,13 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self._traj_marker_pos[:] = traj_samples
         self._traj_marker_pos[..., 2] = self._char_h
 
-        traj_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["traj"].value
+        traj_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["traj"].value
         self._traj_marker_pos[~traj_env_mask, :, 2] = -10.0
 
         self._sit_marker_pos[:] = self._sit_tar_pos # 3d xyz
         self._climb_marker_pos[:] = self._climb_tar_pos # 3d xyz
 
-        actor_ids = torch.cat([self._traj_marker_actor_ids, self._sit_marker_actor_ids, self._sit_object_actor_ids, self._box_actor_ids, self._climb_marker_actor_ids, self._climb_object_actor_ids,], dim=0)
+        actor_ids = torch.cat([self._traj_marker_actor_ids, self._sit_marker_actor_ids, self._sit_object_actor_ids, self._box_actor_ids, self._climb_marker_actor_ids, self._climb_object_actor_ids,self._push_box_actor_ids], dim=0)
         if self._carry_reset_random_height:
             # env has two platforms
             actor_ids = torch.cat([actor_ids, self._platform_actor_ids, self._tar_platform_actor_ids], dim=0)
@@ -665,11 +721,14 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self._box_lib = BoxLib(self._mode, self.cfg["env"]["carry"]["box"], self.num_envs, self.device)
 
         #load boxes used in the push task
-        self._box_lib_push = BoxLib(self._mode, self.cfg["env"]["push"]["box"], self.num_envs, self.device)
+        self._box_push_lib = BoxLib(self._mode, self.cfg["env"]["push"]["box"], self.num_envs, self.device)
 
         # load physical assets
         self._box_handles = []
         self._box_assets = self._load_box_asset(self._box_lib._box_size)
+
+        self._box_handles_push = []
+        self._box_push_assets = self._load_box_asset(self._box_push_lib._box_size,density=10.0)
 
         if self._carry_reset_random_height:
             self._platform_handles = []
@@ -768,6 +827,9 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self._build_sit_object(env_id, env_ptr)
 
         self._build_box(env_id, env_ptr)
+
+        self._build_push_object(env_id, env_ptr)
+
         if self._carry_reset_random_height:
             self._build_platforms(env_id, env_ptr)
         
@@ -822,6 +884,20 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self.gym.set_actor_scale(env_ptr, marker_handle, 0.5)
         self._climb_marker_handles.append(marker_handle)
 
+        return
+    
+    def _build_push_object(self, env_id, env_ptr):
+        col_group = env_id
+        col_filter = 0
+        segmentation_id = 0
+
+        default_pose = gymapi.Transform()
+        default_pose.p.x = 2
+        default_pose.p.y = 0
+        default_pose.p.z = self._box_push_lib._box_size[env_id, 2] / 2 # ensure no penetration between box and ground plane
+    
+        box_handle_push = self.gym.create_actor(env_ptr, self._box_push_assets[env_id], default_pose, "box_push", col_group, col_filter, segmentation_id)
+        self._box_handles_push.append(box_handle_push)
         return
     
     def _build_sit_object(self, env_id, env_ptr):
@@ -932,6 +1008,12 @@ class HumanoidTrajSitCarryClimb(Humanoid):
             box_bps = self._box_lib._box_bps
             box_tar_pos = self._box_tar_pos
 
+            push_box_state = self._push_box_states
+            push_object_bps = self._box_push_lib._box_bps
+            #TODO add this to the location observation
+            box_tar_push_pos = self._box_tar_pos 
+
+
             climb_object_states = self._climb_object_states
             climb_object_bps = self._climb_obj_lib._every_env_object_bps
             climb_tar_pos = self._climb_tar_pos
@@ -950,6 +1032,10 @@ class HumanoidTrajSitCarryClimb(Humanoid):
             box_bps = self._box_lib._box_bps[env_ids]
             box_tar_pos = self._box_tar_pos[env_ids]
 
+            push_box_state = self._push_box_states[env_ids]
+            push_object_bps = self._box_push_lib._box_bps[env_ids]
+            #push_box_tar_pos = self._box_tar_pos[env_ids]
+
             climb_object_states = self._climb_object_states[env_ids]
             climb_object_bps = self._climb_obj_lib._every_env_object_bps[env_ids]
             climb_tar_pos = self._climb_tar_pos[env_ids]
@@ -962,7 +1048,9 @@ class HumanoidTrajSitCarryClimb(Humanoid):
                                             sit_tar_pos, sit_object_states, sit_object_bps, sit_object_facings,
                                             box_states, box_bps, box_tar_pos,
                                             climb_object_states, climb_object_bps, climb_tar_pos,
-                                            task_mask, self.get_multi_task_info()["each_subtask_obs_mask"], self._enable_apply_mask_on_task_obs)
+                                            task_mask, self.get_multi_task_info()["each_subtask_obs_mask"], self._enable_apply_mask_on_task_obs,
+                                            push_box_state, push_object_bps)
+
 
         if (self._enable_task_mask_obs):
             obs = torch.cat([obs, task_mask.float()], dim=-1)
@@ -983,17 +1071,20 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         hands_ids = self._key_body_ids[[0, 1]]
         feet_ids = self._key_body_ids[[2, 3]]
 
+        push_box_pos = self._push_box_states[...,0:3]
+        prev_push_box = self._prev_push_box_pos
+
         time = self.progress_buf * self.dt
         env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
         traj_tar_pos = self._traj_gen.calc_pos(env_ids, time)
 
         reward = self.rew_buf.clone()
 
-        traj_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["traj"].value
+        traj_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["traj"].value
         if traj_env_mask.sum() > 0:
             reward[traj_env_mask] = compute_traj_reward(root_pos[traj_env_mask], traj_tar_pos[traj_env_mask])
         
-        sit_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["sit"].value
+        sit_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["sit"].value
         if sit_env_mask.sum() > 0:
             reward[sit_env_mask] = compute_sit_reward(
                 root_pos[sit_env_mask], self._prev_root_pos[sit_env_mask],
@@ -1001,7 +1092,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
                 sit_object_pos[sit_env_mask], self._sit_tar_pos[sit_env_mask], 1.5, self.dt,
                 self._sit_rwd_vel_penalty, self._sit_rwd_vel_pen_coeff, self._sit_rwd_vel_pen_thre, self._sit_rwd_ang_vel_pen_coeff, self._sit_rwd_ang_vel_pen_thre)
 
-        carry_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["carry"].value
+        carry_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["carry"].value
         if carry_env_mask.sum() > 0:
             walk_r = compute_walk_reward(root_pos[carry_env_mask], self._prev_root_pos[carry_env_mask], box_pos[carry_env_mask], self.dt, 1.5, self._carry_rwd_only_vel_reward)
             carry_r = compute_carry_reward(box_pos[carry_env_mask], self._prev_box_pos[carry_env_mask], self._box_tar_pos[carry_env_mask], self.dt, 1.5, self._box_lib._box_size[carry_env_mask], 
@@ -1011,12 +1102,22 @@ class HumanoidTrajSitCarryClimb(Humanoid):
             putdown_r = compute_putdown_reward(box_pos[carry_env_mask], self._box_tar_pos[carry_env_mask])
             reward[carry_env_mask] = walk_r + carry_r + handheld_r + putdown_r
 
-        climb_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["climb"].value
+        climb_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["climb"].value
         if climb_env_mask.sum() > 0:
             reward[climb_env_mask] = compute_climb_reward(root_pos[climb_env_mask], self._prev_root_pos[climb_env_mask], climb_object_pos[climb_env_mask], self.dt, self._climb_tar_pos[climb_env_mask],
                                                          rigid_body_pos[climb_env_mask], feet_ids, self._char_h, self._climb_obj_lib._every_env_object_valid_radius[climb_env_mask],
                                                          self._climb_rwd_vel_penalty, self._climb_rwd_vel_pen_coeff, self._climb_rwd_vel_pen_thre)
 
+        push_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["push"].value
+        if push_env_mask.sum() > 0:
+            pass
+            #reward[push_env_mask] = compute_pushing_reward(
+                #     root_pos[push_env_mask],
+                #     push_box_pos[push_env_mask],
+                #     self._prev_push_box_pos[push_env_mask],
+                #     self._push_box_init_pos[push_env_mask],
+                #     self._push_box_states[push_env_mask, 3:7],
+                # )
         power = torch.abs(torch.multiply(self.dof_force_tensor, self._dof_vel)).sum(dim = -1)
         power_reward = -self._power_coefficient * power
 
@@ -1162,7 +1263,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
             # traj
             verts = self._traj_gen.get_traj_verts(i)
             
-            verts[..., 2] = self._char_h + (-10 * int(~(self._task_indicator[i] == HumanoidTrajSitCarryClimb.TaskUID["traj"].value)))
+            verts[..., 2] = self._char_h + (-10 * int(~(self._task_indicator[i] == HumanoidTrajSitCarryClimbPush.TaskUID["traj"].value)))
             lines = torch.cat([verts[:-1], verts[1:]], dim=-1).cpu().numpy()
             curr_cols = np.broadcast_to(traj_cols, [lines.shape[0], traj_cols.shape[-1]])
             self.gym.add_lines(self.viewer, env_ptr, lines.shape[0], lines, curr_cols)
@@ -1202,13 +1303,15 @@ class HumanoidTrajSitCarryClimb(Humanoid):
                 self._compute_metrics_evaluation_v2()
             elif self._eval_task == "carry":
                 self._compute_metrics_evaluation_v3()
+            elif self._eval_task == "push":
+                self._compute_metrics_evaluation_v4()
             else:
                 raise NotImplementedError
             self.extras["success"] = self._success_buf
             self.extras["precision"] = self._precision_buf
         
         for task_name in self._multiple_task_names:
-            curr_task_uid = HumanoidTrajSitCarryClimb.TaskUID[task_name].value
+            curr_task_uid = HumanoidTrajSitCarryClimbPush.TaskUID[task_name].value
             curr_env_mask = self._task_indicator == curr_task_uid
 
             self.extras[task_name] = curr_env_mask
@@ -1221,10 +1324,10 @@ class HumanoidTrajSitCarryClimb(Humanoid):
 
         tar_pos = torch.zeros_like(root_pos)
         
-        sit_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["sit"].value
+        sit_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["sit"].value
         tar_pos[sit_env_mask] = self._sit_tar_pos[sit_env_mask]
 
-        climb_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["climb"].value
+        climb_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["climb"].value
         tar_pos[climb_env_mask] = self._climb_tar_pos[climb_env_mask]
 
         pos_diff = tar_pos - root_pos
@@ -1277,6 +1380,18 @@ class HumanoidTrajSitCarryClimb(Humanoid):
 
         return
     
+    #TODO computing metrics for pushing
+    def _compute_metrics_evaluation_v4(self):
+        box_root_pos = self._box_states[..., 0:3]
+
+        pos_diff = 1 - (self._box_init_pos - box_root_pos)
+        pos_err = torch.norm(pos_diff, p=2, dim=-1)
+        dist_mask = pos_err <= self._success_threshold
+        self._success_buf[dist_mask] += 1
+
+        self._precision_buf[dist_mask] = torch.where(pos_err[dist_mask] < self._precision_buf[dist_mask], pos_err[dist_mask], self._precision_buf[dist_mask])
+
+        return
 
     def get_num_amp_obs(self):
         return self._num_amp_obs_steps * self._num_amp_obs_per_step
@@ -1292,13 +1407,15 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         task_onehot = torch.zeros(num_samples * self._num_amp_obs_steps, self._num_tasks, device=self.device, dtype=torch.float32)
         if sk_name != self._common_skill:
             if sk_name in self._traj_skill:
-                task_onehot[..., HumanoidTrajSitCarryClimb.TaskUID["traj"].value] = 1.0
+                task_onehot[..., HumanoidTrajSitCarryClimbPush.TaskUID["traj"].value] = 1.0
             elif sk_name in self._sit_skill:
-                task_onehot[..., HumanoidTrajSitCarryClimb.TaskUID["sit"].value] = 1.0
+                task_onehot[..., HumanoidTrajSitCarryClimbPush.TaskUID["sit"].value] = 1.0
             elif sk_name in self._carry_skill:
-                task_onehot[..., HumanoidTrajSitCarryClimb.TaskUID["carry"].value] = 1.0
+                task_onehot[..., HumanoidTrajSitCarryClimbPush.TaskUID["carry"].value] = 1.0
             elif sk_name in self._climb_skill:
-                task_onehot[..., HumanoidTrajSitCarryClimb.TaskUID["climb"].value] = 1.0
+                task_onehot[..., HumanoidTrajSitCarryClimbPush.TaskUID["climb"].value] = 1.0
+            elif sk_name in self._push_skill:
+                task_onehot[..., HumanoidTrajSitCarryClimbPush.TaskUID["push"].value] = 1.0
             else:
                 raise NotImplementedError
         else:
@@ -1402,13 +1519,13 @@ class HumanoidTrajSitCarryClimb(Humanoid):
     
     def _reset_task_sit(self, env_ids):
 
-        not_task_env_ids = env_ids[self._task_indicator[env_ids] != HumanoidTrajSitCarryClimb.TaskUID["sit"].value]
+        not_task_env_ids = env_ids[self._task_indicator[env_ids] != HumanoidTrajSitCarryClimbPush.TaskUID["sit"].value]
         if len(not_task_env_ids) > 0:
             self._sit_object_states[not_task_env_ids, :] = 0.0
             self._sit_object_states[not_task_env_ids, 2] = -3.0 # place under the ground
             self._sit_object_states[not_task_env_ids, 6] = 1.0 # quat
 
-        is_task_env_ids = env_ids[self._task_indicator[env_ids] == HumanoidTrajSitCarryClimb.TaskUID["sit"].value]
+        is_task_env_ids = env_ids[self._task_indicator[env_ids] == HumanoidTrajSitCarryClimbPush.TaskUID["sit"].value]
         if len(is_task_env_ids) > 0:
             local_reset_ref_env_ids = self._reset_ref_env_ids["sit"]
             local_reset_ref_motion_ids = self._reset_ref_motion_ids["sit"]
@@ -1464,7 +1581,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
     
     def _reset_task_carry(self, env_ids):
 
-        not_task_env_ids = env_ids[self._task_indicator[env_ids] != HumanoidTrajSitCarryClimb.TaskUID["carry"].value]
+        not_task_env_ids = env_ids[self._task_indicator[env_ids] != HumanoidTrajSitCarryClimbPush.TaskUID["carry"].value]
         if len(not_task_env_ids) > 0:
             self._box_states[not_task_env_ids, :] = 0.0
             self._box_states[not_task_env_ids, 2] = 5.0 # place above the ground
@@ -1477,7 +1594,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
 
             self._box_tar_pos[not_task_env_ids, 0:3] = self._box_states[not_task_env_ids, 0:3]
 
-        is_task_env_ids = env_ids[self._task_indicator[env_ids] == HumanoidTrajSitCarryClimb.TaskUID["carry"].value]
+        is_task_env_ids = env_ids[self._task_indicator[env_ids] == HumanoidTrajSitCarryClimbPush.TaskUID["carry"].value]
         if len(is_task_env_ids) > 0:
             local_reset_ref_env_ids = self._reset_ref_env_ids["carry"]
             local_reset_ref_motion_ids = self._reset_ref_motion_ids["carry"]
@@ -1623,15 +1740,79 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         top_surface_z = torch.clamp_max(top_surface_z, self._carry_reset_maxTopSurfaceHeight)
         return top_surface_z - box_size[:, 2] / 2
     
+    def _reset_task_push(self, env_ids):
+
+        not_task_env_ids = env_ids[self._task_indicator[env_ids] != HumanoidTrajSitCarryClimbPush.TaskUID["push"].value]
+        if len(not_task_env_ids) > 0:
+            self._push_box_states[not_task_env_ids, :] = 0.0
+            self._push_box_states[not_task_env_ids, 2] = -9.0 # place under the ground
+            self._push_box_states[not_task_env_ids, 6] = 1.0 # quat
+
+            # self._platform_pos[not_task_env_ids, :] = 0.0
+            # self._platform_pos[not_task_env_ids, -1] = 10.0 - self._box_push_lib._box_size[not_task_env_ids, 2] / 2 - self._platform_height / 2 - 0.05
+            # self._tar_platform_pos[not_task_env_ids, :] = 0.0
+            # self._tar_platform_pos[not_task_env_ids, -1] = .0 - self._box_push_lib._box_size[not_task_env_ids, 2] / 2 - self._platform_height / 2 - 0.05 - 1.0
+
+#TODO set target
+            #self._box_tar_pos[not_task_env_ids, 0:3] = self._box_states[not_task_env_ids, 0:3]
+
+        is_task_env_ids = env_ids[self._task_indicator[env_ids] == HumanoidTrajSitCarryClimbPush.TaskUID["push"].value]
+        random_env_ids = []
+        if len(is_task_env_ids) > 0:
+            local_reset_ref_env_ids = self._reset_ref_env_ids["push"]
+            local_reset_ref_motion_ids = self._reset_ref_motion_ids["push"]
+            local_reset_ref_motion_times = self._reset_ref_motion_times["push"]
+
+
+            for sk_name in ["push"]:
+                if local_reset_ref_env_ids.get(sk_name) is not None:
+                    random_env_ids.append(local_reset_ref_env_ids[sk_name])
+
+
+            if len(random_env_ids) > 0:
+                curr_env_ids = torch.cat(random_env_ids, dim=0)
+
+                root_pos = self._box_push_lib._box_size[curr_env_ids].clone() / 2 # on the ground
+                root_pos[:, 1] = self._humanoid_root_states[curr_env_ids, 1] # y
+
+                max_x_coord = self._kinematic_humanoid_rigid_body_states[curr_env_ids, :, 0].max(dim=-1)[0]
+                root_pos[:, 0] += max_x_coord + 1.5 # 先走过去，再击打 walk over first, then hit
+
+                self._push_box_states[curr_env_ids, 0:3] = root_pos
+                self._push_box_states[curr_env_ids, 3:7] = 0.0
+                self._push_box_states[curr_env_ids, 6] = 1.0 # quaternion
+                self._push_box_states[curr_env_ids, 7:10] = 0.0
+                self._push_box_states[curr_env_ids, 10:13] = 0.0
+
+                self._push_box_init_pos[curr_env_ids, :] = root_pos
+
+            # if local_reset_ref_env_ids.get(sk_name) is not None:
+            #     if (len(local_reset_ref_env_ids[sk_name]) > 0):
+            #         root_pos = self._box_push_lib._box_size[local_reset_ref_env_ids[sk_name]].clone() / 2 # on the ground
+            #         root_pos[:, 1] = self._humanoid_root_states[local_reset_ref_env_ids[sk_name], 1] # y
+
+            #         max_x_coord = self._kinematic_humanoid_rigid_body_states[local_reset_ref_env_ids[sk_name], :, 0].max(dim=-1)[0]
+            #         root_pos[:, 0] += max_x_coord + 10 # 先走过去，再击打 walk over first, then hit
+            #         root_pos[:,1] += 7
+            #         self._push_box_states[local_reset_ref_env_ids[sk_name], 0:3] = root_pos
+                    
+            #         self._push_box_states[local_reset_ref_env_ids[sk_name], 3:7] = 0.0
+            #         self._push_box_states[local_reset_ref_env_ids[sk_name], 6] = 1.0
+            #         self._push_box_states[local_reset_ref_env_ids[sk_name], 7:13] = 0.0 # clear vels
+
+
+            #         self._push_box_init_pos[local_reset_ref_env_ids[sk_name], :] = root_pos
+        return
+    
     def _reset_task_climb(self, env_ids):
 
-        not_task_env_ids = env_ids[self._task_indicator[env_ids] != HumanoidTrajSitCarryClimb.TaskUID["climb"].value]
+        not_task_env_ids = env_ids[self._task_indicator[env_ids] != HumanoidTrajSitCarryClimbPush.TaskUID["climb"].value]
         if len(not_task_env_ids) > 0:
             self._climb_object_states[not_task_env_ids, :] = 0.0
             self._climb_object_states[not_task_env_ids, 2] = -6.0 # place under the ground
             self._climb_object_states[not_task_env_ids, 6] = 1.0 # quat
 
-        is_task_env_ids = env_ids[self._task_indicator[env_ids] == HumanoidTrajSitCarryClimb.TaskUID["climb"].value]
+        is_task_env_ids = env_ids[self._task_indicator[env_ids] == HumanoidTrajSitCarryClimbPush.TaskUID["climb"].value]
         if len(is_task_env_ids) > 0:
             local_reset_ref_env_ids = self._reset_ref_env_ids["climb"]
             local_reset_ref_motion_ids = self._reset_ref_motion_ids["climb"]
@@ -1685,7 +1866,7 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         self._task_indicator[env_ids] = torch.multinomial(self._task_init_prob, num_samples=n, replacement=True)
         
         for task_name in self._multiple_task_names:
-            curr_task_uid = HumanoidTrajSitCarryClimb.TaskUID[task_name].value
+            curr_task_uid = HumanoidTrajSitCarryClimbPush.TaskUID[task_name].value
             curr_env_ids = env_ids[self._task_indicator[env_ids] == curr_task_uid]
 
             if len(curr_env_ids) > 0:
@@ -1708,6 +1889,9 @@ class HumanoidTrajSitCarryClimb(Humanoid):
                 elif task_name == "climb":
                     skill = self._climb_skill
                     skill_init_prob = self._climb_skill_init_prob
+                elif task_name == "push":
+                    skill = self._push_skill
+                    skill_init_prob = self._push_skill_init_prob
                 else:
                     raise NotImplementedError
 
@@ -1740,6 +1924,8 @@ class HumanoidTrajSitCarryClimb(Humanoid):
             self._reset_task_sit(env_ids)
             self._reset_task_carry(env_ids)
             self._reset_task_climb(env_ids)
+            self._reset_task_climb(env_ids)
+            self._reset_task_push(env_ids)
             self._reset_env_tensors(env_ids)
             self._refresh_sim_tensors()
             self._compute_observations(env_ids)
@@ -1758,10 +1944,10 @@ class HumanoidTrajSitCarryClimb(Humanoid):
             self._success_buf[env_ids] = 0
             self._precision_buf[env_ids] = float('Inf')
 
-            traj_env_mask = self._task_indicator[env_ids] == HumanoidTrajSitCarryClimb.TaskUID["traj"].value
+            traj_env_mask = self._task_indicator[env_ids] == HumanoidTrajSitCarryClimbPush.TaskUID["traj"].value
             self._precision_buf[env_ids[traj_env_mask]] = 0 # not Inf
 
-        env_ids_int32 = torch.cat([self._sit_object_actor_ids[env_ids], self._box_actor_ids[env_ids], self._climb_object_actor_ids[env_ids]], dim=0)
+        env_ids_int32 = torch.cat([self._sit_object_actor_ids[env_ids], self._box_actor_ids[env_ids], self._climb_object_actor_ids[env_ids], self._push_box_actor_ids[env_ids]], dim=0)
         if self._carry_reset_random_height:
             # env has two platforms
             env_ids_int32 = torch.cat([env_ids_int32, self._platform_actor_ids[env_ids], self._tar_platform_actor_ids[env_ids]], dim=0)
@@ -1771,12 +1957,12 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         return
 
     def _reset_actors(self, env_ids):
-        if (self._state_init == HumanoidTrajSitCarryClimb.StateInit.Default):
+        if (self._state_init == HumanoidTrajSitCarryClimbPush.StateInit.Default):
             self._reset_default(env_ids)
-        elif (self._state_init == HumanoidTrajSitCarryClimb.StateInit.Start
-              or self._state_init == HumanoidTrajSitCarryClimb.StateInit.Random):
+        elif (self._state_init == HumanoidTrajSitCarryClimbPush.StateInit.Start
+              or self._state_init == HumanoidTrajSitCarryClimbPush.StateInit.Random):
             self._reset_ref_state_init(env_ids)
-        elif (self._state_init == HumanoidTrajSitCarryClimb.StateInit.Hybrid):
+        elif (self._state_init == HumanoidTrajSitCarryClimbPush.StateInit.Hybrid):
             self._reset_hybrid_state_init(env_ids)
         else:
             assert(False), "Unsupported state initialization strategy: {:s}".format(str(self._state_init))
@@ -1975,8 +2161,8 @@ class HumanoidTrajSitCarryClimb(Humanoid):
         env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
         tar_pos = self._traj_gen.calc_pos(env_ids, time)
 
-        traj_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["traj"].value
-        carry_env_mask = self._task_indicator == HumanoidTrajSitCarryClimb.TaskUID["carry"].value
+        traj_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["traj"].value
+        carry_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["carry"].value
         
         self.reset_buf[:], self._terminate_buf[:] = compute_humanoid_reset(self.reset_buf, self.progress_buf,
                                                            self._contact_forces, self._contact_body_ids,
@@ -2089,8 +2275,8 @@ def build_amp_observations(root_pos, root_rot, root_vel, root_ang_vel, dof_pos, 
     return obs
 
 @torch.jit.script
-def compute_location_observations(root_states, traj_samples, sit_tar_pos, sit_object_states, sit_object_bps, sit_object_facings, box_states, box_bps, box_tar_pos, climb_object_states, climb_object_bps, climb_tar_pos, task_mask, each_subtask_obs_mask, enable_apply_mask):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool) -> Tensor
+def compute_location_observations(root_states, traj_samples, sit_tar_pos, sit_object_states, sit_object_bps, sit_object_facings, box_states, box_bps, box_tar_pos, climb_object_states, climb_object_bps, climb_tar_pos, task_mask, each_subtask_obs_mask, enable_apply_mask, push_box_state, push_box_bps):
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool, Tensor, Tensor) -> Tensor
     root_pos = root_states[:, 0:3]
     root_rot = root_states[:, 3:7]
     heading_rot = torch_utils.calc_heading_quat_inv(root_rot)
@@ -2140,6 +2326,30 @@ def compute_location_observations(root_states, traj_samples, sit_tar_pos, sit_ob
     local_box_vel = quat_rotate(heading_rot, box_vel)
     local_box_ang_vel = quat_rotate(heading_rot, box_ang_vel)
 
+    #push
+    push_box_pos = push_box_state[:,0:3]
+    push_box_rot = push_box_state[:, 3:7]
+    push_box_vel = push_box_state[:, 7:10]
+    push_box_ang_vel = push_box_state[:, 10:13]
+
+    local_box_pos_push = push_box_pos - root_pos
+    local_box_pos_push = quat_rotate(heading_rot, local_box_pos)
+
+    local_box_rot_push = quat_mul(heading_rot, push_box_rot)
+    local_box_rot_obs_push = torch_utils.quat_to_tan_norm(local_box_rot_push)
+
+    local_box_vel_push = quat_rotate(heading_rot, push_box_vel)
+    local_box_ang_vel_push = quat_rotate(heading_rot, push_box_ang_vel)
+
+    box_push_pos_exp = torch.broadcast_to(push_box_pos.unsqueeze(-2), (push_box_pos.shape[0], push_box_bps.shape[1], push_box_pos.shape[1])) # (num_envs, 3) >> (num_envs, 8, 3)
+    box_push_rot_exp = torch.broadcast_to(push_box_rot.unsqueeze(-2), (push_box_rot.shape[0], push_box_bps.shape[1], push_box_rot.shape[1])) # (num_envs, 4) >> (num_envs, 8, 4)
+    box_push_bps_world_space = quat_rotate(box_push_rot_exp.reshape(-1, 4), push_box_bps.reshape(-1, 3)) + box_push_pos_exp.reshape(-1, 3) # (num_envs*8, 3)
+
+    ## transform from world space to humanoid local space
+    box_bps_local_space_push = quat_rotate(heading_rot_exp[:, :N].reshape(-1, 4), box_push_bps_world_space - root_pos_exp[:, :N].reshape(-1, 3)) # (num_envs*8, 3)
+
+
+
     # compute observations for bounding points of the box
     ## transform from object local space to world space
     box_pos_exp = torch.broadcast_to(box_pos.unsqueeze(-2), (box_pos.shape[0], box_bps.shape[1], box_pos.shape[1])) # (num_envs, 3) >> (num_envs, 8, 3)
@@ -2151,6 +2361,8 @@ def compute_location_observations(root_states, traj_samples, sit_tar_pos, sit_ob
 
     # task obs
     local_box_tar_pos = quat_rotate(heading_rot, box_tar_pos - root_pos) # 3d xyz
+
+    local_box_tar_pos_push = quat_rotate(heading_rot, box_tar_pos - root_pos) # 3d xyz
 
     # climb
     local_climb_tar_pos = quat_rotate(heading_rot, climb_tar_pos - root_pos) # 3d xyz
@@ -2169,11 +2381,14 @@ def compute_location_observations(root_states, traj_samples, sit_tar_pos, sit_ob
         local_traj_sampls.reshape(root_pos.shape[0], -1),
         local_sit_tar_pos, sit_obj_bps_local_space, sit_face_vec_local_space, local_sit_obj_root_pos, local_sit_obj_root_rot, 
         local_box_vel, local_box_ang_vel, local_box_pos, local_box_rot_obs, box_bps_local_space.reshape(root_pos.shape[0], -1), local_box_tar_pos,
-        local_climb_tar_pos, climb_obj_bps_local_space,
+        local_climb_tar_pos, climb_obj_bps_local_space, local_box_vel_push, local_box_ang_vel_push, local_box_pos_push, local_box_rot_obs_push,
+        box_bps_local_space_push.reshape(root_pos.shape[0], -1)
         ], dim=-1)
 
     if enable_apply_mask:
         mask = task_mask[:, None, :].float() @ torch.broadcast_to(each_subtask_obs_mask[None, :, :].float(), (root_states.shape[0], each_subtask_obs_mask.shape[0], each_subtask_obs_mask.shape[1]))
+        # print(mask.shape)
+        # print(obs.shape)
         obs *= mask.squeeze(1)
     
     return obs
@@ -2235,6 +2450,64 @@ def compute_sit_reward(root_pos, prev_root_pos, root_rot, prev_root_rot,
         root_z_ang_vel_penalty[~dist_mask] = 0.0
         reward += root_z_ang_vel_penalty
 
+    return reward
+
+@torch.jit.script
+def compute_pushing_reward(
+        root_pos,
+        box_pos,
+        prev_box_pos,
+        box_init_pos,
+        box_rot,
+        target_dir
+) :
+    """
+    + progress reward for moving box forward (+X)
+    + proximity reward for staying close enough to interact
+    – lateral drift penalty so the box stays in lane
+    – (optional) speed penalty to curb jitter
+    – (optional) rotation mis-alignment penalty
+    """
+    # ---------- distances ----------
+    # Horizontal (XY) vecs for convenience
+    box_xy  = box_pos[..., :2]
+    init_xy = box_init_pos[..., :2]
+    human_xy = root_pos[..., :2]
+
+    forward_delta = box_xy - init_xy                        # progress vector
+    forward_dist  = torch.dot(forward_delta, target_dir)    # signed scalar progress (+ is good)
+
+    lateral_err = torch.sum((forward_delta - forward_dist.unsqueeze(-1) * target_dir)**2, dim=-1).sqrt()
+
+    # ---------- rewards ----------
+    # 1. progress – use softplus so reward keeps growing but with diminishing returns
+    r_progress = torch.log1p(torch.relu(forward_dist))      # ≥ 0
+
+    # 2. stay within reach (≤ 1 m)
+    prox_err = torch.norm(human_xy - box_xy, dim=-1)
+    r_prox   = torch.exp(-2.0 * prox_err**2)
+
+    # 3. keep straight (penalty)
+    p_drift = -1.0 * torch.tanh(2.0 * lateral_err)
+
+    # 4. optional smooth-motion penalty
+    # box_vel_xy = (box_xy - prev_box_pos[..., :2]) / dt
+
+    # speed_pen  = -0.01 * torch.clamp(box_vel_xy.norm(dim=-1) - 1.0, min=0.0)
+
+    # 5. (optional) facing penalty
+    #    assume +X is “ideal”; convert quaternion → heading
+    # heading = torch_utils.calc_heading_quat(box_rot)    # returns quat facing world +X when heading=0
+    # facing_vec = quat_rotate(heading, torch.tensor([1.0, 0.0, 0.0], device=box_rot.device))
+    # cos_facing = facing_vec[..., 0]                     # dot with +X
+    # facing_pen = -0.1 * (1.0 - cos_facing)
+
+    # weight & combine
+    reward = (
+        0.5 * r_progress +
+        0.3 * r_prox     +
+        0.2 * p_drift    
+    )
     return reward
 
 @torch.jit.script

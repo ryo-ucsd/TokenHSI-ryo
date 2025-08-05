@@ -38,11 +38,21 @@ from utils import torch_utils
 
 from env.tasks.base_task import BaseTask
 
+import sys
+sys.path.append("./")
+from lpanlib.poselib.skeleton.skeleton3d import SkeletonTree
+
 class Humanoid(BaseTask):
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
         self.cfg = cfg
         self.sim_params = sim_params
         self.physics_engine = physics_engine
+
+        #use second GPU
+        # device_id = 1
+        # print("device id")
+        # print(device_id)
+        
 
         self._pd_control = self.cfg["env"]["pdControl"]
         self.power_scale = self.cfg["env"]["powerScale"]
@@ -81,6 +91,10 @@ class Humanoid(BaseTask):
         contact_force_tensor = self.gym.acquire_net_contact_force_tensor(self.sim)
 
         sensors_per_env = 2
+        print(">>> sensors_per_env:", sensors_per_env)
+        
+        print(">>> raw sensor_tensor:", sensor_tensor)
+
         self.vec_sensor_tensor = gymtorch.wrap_tensor(sensor_tensor).view(self.num_envs, sensors_per_env * 6)
 
         dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
@@ -117,6 +131,8 @@ class Humanoid(BaseTask):
         self._initial_humanoid_rigid_body_states[..., 7:13] = 0
 
         self._rigid_body_pos = rigid_body_state_reshaped[..., :self.num_bodies, 0:3]
+        print("++++++++++++++++++++++++++++++++++++++++++++++++++++")
+        # print(self._rigid_body_pos)
         self._rigid_body_rot = rigid_body_state_reshaped[..., :self.num_bodies, 3:7]
         self._rigid_body_vel = rigid_body_state_reshaped[..., :self.num_bodies, 7:10]
         self._rigid_body_ang_vel = rigid_body_state_reshaped[..., :self.num_bodies, 10:13]
@@ -131,6 +147,7 @@ class Humanoid(BaseTask):
         contact_bodies = self.cfg["env"]["contactBodies"]
         self._key_body_ids = self._build_key_body_ids_tensor(key_bodies)
         self._contact_body_ids = self._build_contact_body_ids_tensor(contact_bodies)
+        #print(self._contact_body_ids)
         
         if self.viewer != None:
             self._init_camera()
@@ -150,6 +167,12 @@ class Humanoid(BaseTask):
 
     def create_sim(self):
         self.up_axis_idx = self.set_sim_params_up_axis(self.sim_params, 'z')
+        try:
+            if self.cfg["env"]["useSecondGPU"]:
+                self.graphics_device_id = 1
+                self.device_id = 1
+        except:
+            pass
         self.sim = super().create_sim(self.device_id, self.graphics_device_id, self.physics_engine, self.sim_params)
 
         self._create_ground_plane()
@@ -219,11 +242,46 @@ class Humanoid(BaseTask):
             self._dof_body_ids = [1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13, 14]
             self._dof_offsets = [0, 3, 6, 9, 10, 13, 14, 17, 20, 23, 26, 29, 32]
             self._dof_obs_size = 72
-            self._num_actions = 28 + 2 * 2
+            self._num_actions = 28 + 2 * 2 #addint knees dim from 1 to 3
             self._num_actions_joint = self._num_actions
             self._num_obs = 1 + 15 * (3 + 6 + 3 + 3) - 3
+        
+        elif asset_file == "mjcf/smplx_humanoid_fingers/omomo.xml":
+            tree = SkeletonTree.from_mjcf(
+                        "/mnt/data1/ryo/TokenHSI-ryo/tokenhsi/data/assets/mjcf/smplx_humanoid_fingers/omomo.xml"
+                        )
+            # 1) Actuate all non‐root joints:
+            num_j = tree.num_joints  # from your Week 1 test
+            one_dof = {
+                        "L_Elbow", "R_Elbow",
+                        "L_Wrist", "R_Wrist",
+                        # all the “1” finger joints:
+                        "L_Index1", "L_Middle1", "L_Ring1", "L_Pinky1", "L_Thumb1",
+                        "R_Index1", "R_Middle1", "R_Ring1", "R_Pinky1", "R_Thumb1",
+                    }
+            # skip the root (index 0)
+            self._dof_body_ids = list(range(1, num_j))
+            # 2) build a list of DOF counts per joint:
+            dof_counts = []
+            for jid in self._dof_body_ids:
+                name = tree.node_names[jid]
+                dof_counts.append(1 if name in one_dof else 3)
 
+            # 3) compute the flat‐index offsets:
+            self._dof_offsets = [0]
+            for c in dof_counts:
+                self._dof_offsets.append(self._dof_offsets[-1] + c)
+
+            # 4) obs/action sizes follow automatically:
+            total_dof = self._dof_offsets[-1]
+            self._dof_obs_size   = 2 * total_dof      # pos+vel
+            self._num_actions    = total_dof
+            self._num_actions_joint = total_dof
+
+            # 5) full‐state obs (same as before):
+            self._num_obs = 1 + (num_j*(3+6+3+3)) - 3
         else:
+            print(asset_file)
             print("Unsupported character config file: {s}".format(asset_file))
             assert(False)
 
@@ -317,6 +375,8 @@ class Humanoid(BaseTask):
         elif (asset_file == "mjcf/phys_humanoid.xml") or (asset_file == "mjcf/phys_humanoid_v2.xml"):
             self._char_h = 0.92 # perfect number
         elif (asset_file == "mjcf/phys_humanoid_v3.xml") or (asset_file == "mjcf/phys_humanoid_v3_box_foot.xml"):
+            self._char_h = 0.94
+        elif asset_file == "mjcf/smplx_humanoid_fingers/omomo.xml":
             self._char_h = 0.94
         else:
             print("Unsupported character config file: {s}".format(asset_file))
