@@ -49,7 +49,7 @@ env:
 
   asset:
     assetRoot: "tokenhsi/data/assets"
-    assetFileName: "mjcf/phys_humanoid_v3.xml"
+    assetFileName: "mjcf/smplx_humanoid_fingers/omomo.xml"
 
   plane:
     staticFriction: 1.0

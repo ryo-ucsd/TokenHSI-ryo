@@ -93,14 +93,8 @@ class HumanoidPush(Humanoid):
 
         # ----- Reward config ------------------------------------------
         env_cfg  = cfg["env"]
-        rew_cfg  = env_cfg["reward"]["push"]
-        self._tar_box_pos         = torch.tensor(rew_cfg["targetBoxPos"],
-                                                 dtype=torch.float32,
-                                                 device=torch.device(device_type, device_id))
-        self._only_vel_reward     = rew_cfg.get("onlyVelReward", False)
-        self._debug_vel           = rew_cfg.get("debugVel", False)
-        self._vel_pen_thre        = rew_cfg.get("boxVelPenaltyThre", 99.0)
-        self._vel_pen_coeff       = rew_cfg.get("boxVelPenCoeff", 0.0)
+        #rew_cfg  = env_cfg["reward"]["push"]
+   
         
 
 
@@ -565,7 +559,7 @@ class HumanoidPush(Humanoid):
         if len(random_env_ids) > 0:
             ids = torch.cat(random_env_ids, dim=0)
 
-            new_target_pos = torch.add(self._humanoid_root_states[ids, :3], torch.tensor([5,0,0], device=self.device))
+            new_target_pos = torch.add(self._humanoid_root_states[ids, :3], torch.tensor([3,0,0], device=self.device))
             
             new_target_pos[:, 2] = self._box_size[ids, 2] / 2 # place the box on the ground
 
@@ -814,6 +808,7 @@ class HumanoidPush(Humanoid):
         box_pos = self._box_states[:, 0:3]
         prev_pos = self._prev_box_pos[:, 0:3]
         box_vel = (box_pos - prev_pos) / self.dt  # Box velocity (m/s)
+        print(type(self.dt))
         root_pos = self._humanoid_root_states[..., 0:3]
         #right hand id = 5
         #left hand id = 8
@@ -849,7 +844,7 @@ class HumanoidPush(Humanoid):
 
         vel       = (box_pos - prev_pos) / self.dt          # (N,3)
 
-        to_tar    = self._tar_box_pos.unsqueeze(0) - box_pos
+        to_tar    = self._tar_pos.unsqueeze(0) - box_pos
         dist      = torch.norm(to_tar, dim=-1)
         unit_dir  = torch.where(dist.unsqueeze(-1) > 1e-6,
                                 to_tar / dist.unsqueeze(-1),
@@ -858,6 +853,8 @@ class HumanoidPush(Humanoid):
 
         # print("dist")
         # print(dist)
+
+        print(dist)
 
         push_rew  = 1.0 / (1.0 + dist) + forward_v
         
@@ -876,14 +873,16 @@ class HumanoidPush(Humanoid):
             torch.zeros_like(box_speed)
         )
 
+        speed_rew = torch.exp(-0.5 * (torch.abs(1.5 - box_speed)))
+
         # 5. Success condition: Box moved >1m from start (2D distance)
         success = box2init_dist > 1.0
         success_bonus = success.float() * 0.1  # Large bonus on success
 
         # Final reward (adjust weights as needed)
         reward = (
-            0.7 * push_rew +      # Main push incentive
-            0.3 * contact_rew  # Keep touching the box with hands
+            0.9 * push_rew +      # Main push incentive
+            0.1 * contact_rew  # Keep touching the box with hands
             + power_reward       
         )
 

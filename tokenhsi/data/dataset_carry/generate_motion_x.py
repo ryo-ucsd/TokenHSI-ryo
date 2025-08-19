@@ -27,6 +27,29 @@ BODY_24 = [
     "L_Shoulder","R_Shoulder","L_Elbow","R_Elbow","L_Wrist","R_Wrist","L_Hand","R_Hand"
 ]
 
+# parameters for motion editing
+candidates = {
+        "ACCAD+__+Female1Walking_c3d+__+B19_-_walk_to_pick_up_box_stageii": [105, 205],
+        "ACCAD+__+Female1Walking_c3d+__+B21_-_put_down_box_to_walk_stageii": [0, 135],
+        "OMOMO+__+sub7_largebox_006": [85, 155],
+        "OMOMO+__+sub7_largebox_007": [85, 165],
+        "OMOMO+__+sub7_largebox_008": [0, 130],
+        "OMOMO+__+sub7_largebox_009": [100, 175],
+        "OMOMO+__+sub7_largebox_010": [80, 160],
+        "OMOMO+__+sub7_largebox_011": [75, 145],
+        "OMOMO+__+sub7_largebox_042": [0, 170],
+        "OMOMO+__+sub7_largebox_043": [0, 180],
+        "OMOMO+__+sub7_largebox_044": [0, 160],
+        "OMOMO+__+sub7_largebox_045": [0, 190],
+        "OMOMO+__+sub7_largebox_046": [0, 155],
+        "OMOMO+__+sub7_largebox_047": [0, 165],
+        "OMOMO+__+sub7_smallbox_046": [0, 205],
+        "OMOMO+__+sub7_smallbox_047": [0, 190],
+        "OMOMO+__+sub7_smallbox_048": [0, 175],
+        "OMOMO+__+sub7_smallbox_049": [0, 190],
+        "OMOMO+__+sub7_smallbox_051": [0, 160],
+    }
+
 # Option B: drop L_Hand/R_Hand (target rig parents fingers at wrists)
 BODY_22 = [n for n in BODY_24 if n not in ("L_Hand","R_Hand")]
 
@@ -50,6 +73,8 @@ if __name__ == "__main__":
     if not all_files:
         print("No smplx_params.npy files found.")
         sys.exit(0)
+
+    
 
     # Load target skeleton (with fingers)
     target_skel = SkeletonTree.from_mjcf(TARGET_XML)
@@ -103,9 +128,21 @@ if __name__ == "__main__":
     for f in pbar:
         raw = np.load(f, allow_pickle=True).item()
 
+        seq_name = f.split("/")[-2]
+
+        if seq_name in list(candidates.keys()):
+            f_start = candidates[seq_name][0]
+            f_end = candidates[seq_name][1]
+            poses = torch.tensor(raw["poses"][f_start:f_end], dtype=torch.float32)
+            trans = torch.tensor(raw["trans"][f_start:f_end], dtype=torch.float32)
+        else:
+            poses = torch.tensor(raw["poses"], dtype=torch.float32)
+            trans = torch.tensor(raw["trans"], dtype=torch.float32)
+        
+
         # Robust conversion (handles numpy arrays or torch tensors saved inside .npy)
-        poses_np = np.asarray(raw["poses"], dtype=np.float32)   # (T, 162) for 54 joints
-        trans_np = np.asarray(raw["trans"], dtype=np.float32)   # (T, 3)
+        poses_np = np.asarray(poses, dtype=np.float32)   # (T, 162) for 54 joints
+        trans_np = np.asarray(trans, dtype=np.float32)   # (T, 3)
         fps = float(raw.get("fps", 30.0))
 
         #so T is the number of poses

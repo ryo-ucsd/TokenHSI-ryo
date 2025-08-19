@@ -78,6 +78,8 @@ if __name__ == '__main__':
     skel_dict["local_translation"]["arr"] = jts_local_trans
     smpl_original_skeleton = SkeletonTree.from_dict(skel_dict)
 
+    
+
     # create tposes
     smpl_original_tpose = SkeletonState.zero_pose(smpl_original_skeleton)
 
@@ -101,7 +103,7 @@ if __name__ == '__main__':
 
         print("processing [skill: {}] [seq_name: {}]".format(skill, seq_name))
         
-        raw_params = np.load(f, allow_pickle=True).item()
+        raw_params = np.load(f, allow_pickle=True).item() 
 
         if seq_name in list(candidates.keys()):
             f_start = candidates[seq_name][0]

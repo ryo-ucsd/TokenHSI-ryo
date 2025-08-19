@@ -75,6 +75,8 @@ def create_rlgpu_env(**kwargs):
         cfg['rank'] = rank
         cfg['rl_device'] = 'cuda:' + str(rank)
 
+    
+
     sim_params = parse_sim_params(args, cfg, cfg_train)
     task, env = parse_task(args, cfg, cfg_train, sim_params)
 
@@ -176,6 +178,7 @@ env_configurations.register('rlgpu', {
     'env_creator': lambda **kwargs: create_rlgpu_env(**kwargs),
     'vecenv_type': 'RLGPU'})
 
+    # register new AMP network builder and agent that is not originally supported by rl_games library
 def build_alg_runner(algo_observer):
     runner = Runner(algo_observer)
     runner.algo_factory.register_builder('amp', lambda **kwargs : amp_agent.AMPAgent(**kwargs))

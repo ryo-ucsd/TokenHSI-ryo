@@ -1,0 +1,6 @@
+motions:
+  jump:
+  - file: motions/SFU/SFU+__+0005+__+0005_2FeetJump001_stageii/phys_humanoid_v3/ref_motion.npy
+    weight: 1.0
+  - file: motions/SFU/SFU+__+0015+__+0015_JumpOverObstacle001_stageii/phys_humanoid_v3/ref_motion.npy
+    weight: 1.0

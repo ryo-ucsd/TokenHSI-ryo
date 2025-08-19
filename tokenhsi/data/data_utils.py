@@ -40,6 +40,54 @@ def process_amass_seq(fname, output_path):
     
     return
 
+def process_amass_seq_smplx(fname, output_path,  finger_mode="flat"):
+    """
+    Return a dict with (T,162) = 54 joints (24 body + 30 fingers):
+    fingers are zeros (flat) or tiny constant curl if finger_mode='rest_curl'.
+    """
+    # load raw params from AMASS dataset
+    raw_params = dict(np.load(fname, allow_pickle=True))
+
+    poses = raw_params["poses"]
+    trans = raw_params["trans"]
+
+    # downsample from 120hz to 30hz
+    source_fps = raw_params["mocap_frame_rate"]
+    target_fps = 30
+    skip = int(source_fps // target_fps)
+    poses = poses[::skip]
+    trans = trans[::skip]
+
+    # extract 24 SMPL joints from 55 SMPL-X joints
+    joints_to_use = np.array(
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 40]
+    )
+    joints_to_use = np.arange(0, 156).reshape((-1, 3))[joints_to_use].reshape(-1)
+    poses = poses[:, joints_to_use]
+
+    required_params = {}
+    required_params["poses"] = poses
+    required_params["trans"] = trans
+    required_params["fps"] = target_fps
+    
+    out = required_params      # (T,72)
+    T = out["poses"].shape[0]
+
+    if finger_mode == "rest_curl":
+        # small natural curl around local +x: MCP~10°, PIP~8°, DIP~6°
+        mcp, pip, dip = np.deg2rad([10.0, 8.0, 6.0])
+        one_hand = np.array([mcp,0,0,  pip,0,0,  dip,0,0] * 5, dtype=np.float32)  # 5 fingers × (3 joints × 3 aa)
+        fingers_aa = np.tile(np.concatenate([one_hand, one_hand]), (T,1))         # L+R = 90 dims
+    else:
+        fingers_aa = np.zeros((T, 30*3), dtype=np.float32)  # flat
+
+    poses_54 = np.concatenate([out["poses"], fingers_aa], axis=-1)  # (T, 162)
+
+    np.save(output_path, {"poses": poses_54.astype(np.float32),
+            "trans": out["trans"],
+            "fps": out["fps"]}
+            )
+    return 
 def project_joints(motion):
     """ This is the original function used by ASE, designed for amp_humanoid.xml """
 

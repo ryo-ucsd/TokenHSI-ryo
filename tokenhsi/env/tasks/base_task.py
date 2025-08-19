@@ -63,6 +63,11 @@ class BaseTask():
         self.randomize_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long)
         self.extras = {}
+        self.start_times = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.long)
+        self.data_id = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.long)
+        self.extras = {}
 
         self.original_props = {}
         self.dr_randomizations = {}

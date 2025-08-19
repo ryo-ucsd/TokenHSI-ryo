@@ -60,8 +60,8 @@ params:
     score_to_win: 20000
     max_epochs: 1000000
     save_best_after: 50
-    save_frequency: 1000
-    save_intermediate: False
+    save_frequency: 500
+    save_intermediate: True
     print_stats: True
     grad_norm: 1.0
     entropy_coef: 0.0
@@ -87,6 +87,7 @@ params:
     disc_weight_decay: 0.0001
     normalize_amp_input: True
     enable_eps_greedy: False
+    rolloutLength: 300
 
     task_reward_w: 0.5
     disc_reward_w: 0.5

@@ -1,4 +1,4 @@
-#!/bin/bash
+!/bin/bash
 
 cfg_path="./tokenhsi/data/dataset_cfg.yaml"
 
@@ -47,7 +47,7 @@ echo "Processing $dataset"
 printf "\n\n"
 python ./tokenhsi/data/$dataset/preprocess_amass.py --dataset_cfg $cfg_path
 python ./tokenhsi/data/$dataset/preprocess_omomo.py --dataset_cfg $cfg_path
-python ./tokenhsi/data/$dataset/generate_motion.py
+python ./tokenhsi/data/$dataset/generate_motion_x.py
 python ./tokenhsi/data/$dataset/generate_object.py
 printf "\n\n"
 echo "Done!"

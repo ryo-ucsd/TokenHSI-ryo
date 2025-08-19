@@ -60,6 +60,8 @@ class HumanoidCarry(Humanoid):
         self._box_vel_pen_coeff = cfg["env"]["box_vel_pen_coeff"]
         self._box_vel_pen_thre = cfg["env"]["box_vel_pen_threshold"]
 
+        self.rollout_length = cfg['env']['rolloutLength']
+
         self._mode = cfg["env"]["mode"] # determine which set of objects to use (train or test)
         assert self._mode in ["train", "test"]
 
@@ -151,6 +153,10 @@ class HumanoidCarry(Humanoid):
         # tensors for fixing obs bug
         self._kinematic_humanoid_rigid_body_states = torch.zeros((self.num_envs, self.num_bodies, 13), device=self.device, dtype=torch.float)
 
+
+        self.dof_pos_amp = torch.index_select(self._dof_pos, dim=1, index=self._amp_dof_indices)
+        self.dof_vel_amp = torch.index_select(self._dof_vel, dim=1, index=self._amp_dof_indices)
+        
         ###### evaluation!!!
         self._is_eval = cfg["args"].eval
         if self._is_eval:
@@ -707,10 +713,10 @@ class HumanoidCarry(Humanoid):
         return
 
     def _compute_reset(self):
-        self.reset_buf[:], self._terminate_buf[:] = compute_humanoid_reset(self.reset_buf, self.progress_buf,
-                                                   self._contact_forces, self._contact_body_ids,
-                                                   self._rigid_body_pos, self.max_episode_length,
-                                                   self._enable_early_termination, self._termination_heights,)
+        self.reset_buf[:], self._terminate_buf[:] = compute_humanoid_reset(self.reset_buf, self.progress_buf, self.obs_buf,
+                                                                                self._rigid_body_pos, self.max_episode_length,
+                                                                                self._enable_early_termination, self._termination_heights, self.start_times, 
+                                                                                self.rollout_length)
         return
 
     def pre_physics_step(self, actions):
@@ -728,7 +734,6 @@ class HumanoidCarry(Humanoid):
                 if (len(self._reset_ref_env_ids[sk_name]) > 0):
 
                     curr_env_ids = self._reset_ref_env_ids[sk_name]
-
                     root_pos, root_rot = self._motion_lib[sk_name].get_obj_motion_state(
                         motion_ids=self._reset_ref_motion_ids[sk_name], 
                         motion_times=self._reset_ref_motion_times[sk_name]
@@ -882,10 +887,14 @@ class HumanoidCarry(Humanoid):
         motion_times = motion_times.view(-1)
         root_pos, root_rot, dof_pos, root_vel, root_ang_vel, dof_vel, key_pos \
                = motion_lib.get_motion_state(motion_ids, motion_times)
-        amp_obs_demo = build_amp_observations(root_pos, root_rot, root_vel, root_ang_vel,
-                                              dof_pos, dof_vel, key_pos,
-                                              self._local_root_obs, self._root_height_obs,
-                                              self._dof_obs_size, self._dof_offsets)
+        dof_pos_amp = torch.index_select(dof_pos, dim=1, index=self._amp_dof_indices)
+        dof_vel_amp = torch.index_select(dof_vel, dim=1, index=self._amp_dof_indices)
+
+        
+        amp_obs_demo = build_amp_observations(root_pos, root_rot, root_vel, root_ang_vel, 
+                                              dof_pos_amp, dof_vel_amp, key_pos,
+                                                               self._local_root_obs, self._root_height_obs, 
+                                                               self._amp_dof_obs_size, self._amp_dof_offsets)
         return amp_obs_demo
 
     def _build_amp_obs_demo_buf(self, num_samples):
@@ -903,7 +912,8 @@ class HumanoidCarry(Humanoid):
         elif (asset_file == "mjcf/phys_humanoid.xml") or (asset_file == "mjcf/phys_humanoid_v2.xml") or (asset_file == "mjcf/phys_humanoid_v3.xml"):
             self._num_amp_obs_per_step = 13 + self._dof_obs_size + 28 + 2 * 2 + 3 * num_key_bodies # [root_h, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, key_body_pos]
         elif asset_file == "mjcf/smplx_humanoid_fingers/omomo.xml":
-            self._num_amp_obs_per_step = 13 + self._dof_obs_size + 28 + 2 * 2 + 3 * num_key_bodies
+
+            self._num_amp_obs_per_step = 13 + self._amp_dof_obs_size + 28 + 2 * 2 + 3 * num_key_bodies +31
         else:
             print("Unsupported character config file: {s}".format(asset_file))
             assert(False)
@@ -1062,10 +1072,15 @@ class HumanoidCarry(Humanoid):
         motion_times = motion_times.view(-1)
         root_pos, root_rot, dof_pos, root_vel, root_ang_vel, dof_vel, key_pos \
                = self._motion_lib[skill_name].get_motion_state(motion_ids, motion_times)
+        
+        dof_pos_amp = torch.index_select(dof_pos, dim=1, index=self._amp_dof_indices)
+        dof_vel_amp = torch.index_select(dof_vel, dim=1, index=self._amp_dof_indices)
+
+        
         amp_obs_demo = build_amp_observations(root_pos, root_rot, root_vel, root_ang_vel, 
-                                              dof_pos, dof_vel, key_pos, 
-                                              self._local_root_obs, self._root_height_obs, 
-                                              self._dof_obs_size, self._dof_offsets)
+                                              dof_pos_amp, dof_vel_amp, key_pos,
+                                                               self._local_root_obs, self._root_height_obs, 
+                                                               self._amp_dof_obs_size, self._amp_dof_offsets)
         self._hist_amp_obs_buf[env_ids] = amp_obs_demo.view(self._hist_amp_obs_buf[env_ids].shape)
         return
     
@@ -1089,25 +1104,39 @@ class HumanoidCarry(Humanoid):
         return
     
     def _compute_amp_observations(self, env_ids=None):
+        # 1) Mask DOFs for AMP
+        dof_pos_amp = torch.index_select(self._dof_pos, dim=1, index=self._amp_dof_indices)
+        dof_vel_amp = torch.index_select(self._dof_vel, dim=1, index=self._amp_dof_indices)
+
         if (env_ids is None):
             key_body_pos = self._rigid_body_pos[:, self._key_body_ids, :]
             self._curr_amp_obs_buf[:] = build_amp_observations(self._rigid_body_pos[:, 0, :],
                                                                self._rigid_body_rot[:, 0, :],
                                                                self._rigid_body_vel[:, 0, :],
                                                                self._rigid_body_ang_vel[:, 0, :],
-                                                               self._dof_pos, self._dof_vel, key_body_pos,
-                                                               self._local_root_obs, self._root_height_obs, 
-                                                               self._dof_obs_size, self._dof_offsets)
+                                                               self.dof_pos_amp, self.dof_vel_amp, key_body_pos,
+                                                                   self._local_root_obs, self._root_height_obs, 
+                                                                   self._amp_dof_obs_size, self._amp_dof_offsets)
         else:
             kinematic_rigid_body_pos = self._kinematic_humanoid_rigid_body_states[:, :, 0:3]
             key_body_pos = kinematic_rigid_body_pos[:, self._key_body_ids, :]
-            self._curr_amp_obs_buf[env_ids] = build_amp_observations(self._kinematic_humanoid_rigid_body_states[env_ids, 0, 0:3],
+            test = build_amp_observations(self._kinematic_humanoid_rigid_body_states[env_ids, 0, 0:3],
                                                                    self._kinematic_humanoid_rigid_body_states[env_ids, 0, 3:7],
                                                                    self._kinematic_humanoid_rigid_body_states[env_ids, 0, 7:10],
                                                                    self._kinematic_humanoid_rigid_body_states[env_ids, 0, 10:13],
-                                                                   self._dof_pos[env_ids], self._dof_vel[env_ids], key_body_pos[env_ids],
+                                                                   self.dof_pos_amp[env_ids], self.dof_vel_amp[env_ids], key_body_pos[env_ids],
                                                                    self._local_root_obs, self._root_height_obs, 
-                                                                   self._dof_obs_size, self._dof_offsets)
+                                                                   self._amp_dof_obs_size, self._amp_dof_offsets)
+            self._curr_amp_obs_buf[env_ids] = test
+            
+            
+            # build_amp_observations(self._kinematic_humanoid_rigid_body_states[env_ids, 0, 0:3],
+            #                                                        self._kinematic_humanoid_rigid_body_states[env_ids, 0, 3:7],
+            #                                                        self._kinematic_humanoid_rigid_body_states[env_ids, 0, 7:10],
+            #                                                        self._kinematic_humanoid_rigid_body_states[env_ids, 0, 10:13],
+            #                                                        self._dof_pos[env_ids], self._dof_vel[env_ids], key_body_pos[env_ids],
+            #                                                        self._local_root_obs, self._root_height_obs, 
+            #                                                        self._dof_obs_size, self._dof_offsets)
         return
 
 
@@ -1116,34 +1145,40 @@ class HumanoidCarry(Humanoid):
 #####################################################################
 
 @torch.jit.script
-def compute_humanoid_reset(reset_buf, progress_buf, contact_buf, contact_body_ids, rigid_body_pos,
-                           max_episode_length, enable_early_termination, termination_heights):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, float, bool, Tensor) -> Tuple[Tensor, Tensor]
+def compute_humanoid_reset(reset_buf, progress_buf, obs_buf, rigid_body_pos,
+                               max_episode_length, enable_early_termination, termination_heights, 
+                               start_times, rollout_length):
+    # type: (Tensor, Tensor, Tensor, Tensor, int, bool, Tensor, Tensor, int) -> Tuple[Tensor, Tensor]
     terminated = torch.zeros_like(reset_buf)
+    #invalid_batches = torch.any(invalid_obs, dim=1)  # Check if any invalid number in each batch (B, N)
 
-    if (enable_early_termination):
-
-        body_height = rigid_body_pos[..., 2]
-        fall_height = body_height < termination_heights
-        fall_height[:, contact_body_ids] = False
-        fall_height = torch.any(fall_height, dim=-1)
-
-        has_fallen = torch.logical_and(torch.ones_like(fall_height), fall_height)
-
-        # first timestep can sometimes still have nonzero contact forces
-        # so only check after first couple of steps
-        has_fallen *= (progress_buf > 1)
-        terminated = torch.where(has_fallen, torch.ones_like(reset_buf), terminated)
     
-    reset = torch.where(progress_buf >= max_episode_length - 1, torch.ones_like(reset_buf), terminated)
+    if (True):
 
+        body_height = rigid_body_pos[:, 0, 2] # root height
+        body_fall = body_height < termination_heights# [4096] 
+        has_failed = body_fall.clone()
+        has_failed *= (progress_buf > 1)
+        invalid_obs = ~torch.isfinite(obs_buf)  # True where obs is NaN or infinite
+        invalid_batches = torch.any(invalid_obs, dim=1)  # Check if any invalid number in each batch (B, N)
+        if torch.any(invalid_obs):
+            print("invalid observation")
+            raise Exception("invalid observation")
+            
+        terminated = torch.where(torch.logical_or(invalid_batches, has_failed), torch.ones_like(reset_buf), terminated)
+    
+    reset = torch.where(torch.logical_or(progress_buf >= max_episode_length-1, progress_buf - start_times >= rollout_length-1), torch.ones_like(reset_buf), terminated)
+    if not enable_early_termination:
+        terminated = torch.where(invalid_batches, torch.ones_like(reset_buf), terminated)
     return reset, terminated
 
 
-@torch.jit.script
+#@torch.jit.script
 def build_amp_observations(root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, key_body_pos, 
                            local_root_obs, root_height_obs, dof_obs_size, dof_offsets):
     # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool, bool, int, List[int]) -> Tensor
+    
+    
     root_h = root_pos[:, 2:3]
     heading_rot = torch_utils.calc_heading_quat_inv(root_rot)
 

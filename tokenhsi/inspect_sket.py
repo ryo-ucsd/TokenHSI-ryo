@@ -1,0 +1,30 @@
+import sys
+sys.path.append("./")
+from lpanlib.poselib.skeleton.skeleton3d import SkeletonTree
+
+tree = SkeletonTree.from_mjcf(
+  "/mnt/data1/ryo/TokenHSI-ryo/tokenhsi/data/assets/mjcf/smplx_humanoid_fingers/omomo.xml"
+)
+print(tree.num_joints, tree.node_names[:5], "...", tree.node_names[-5:])
+print(tree.node_names)
+# Expect ~55 joints, including names like finger_index_0_r, etc.
+#there are 52 joints
+
+"""
+['Pelvis', 'L_Hip', 'L_Knee', 'L_Ankle', 'L_Toe', 
+'R_Hip', 'R_Knee', 'R_Ankle', 'R_Toe', 'Torso', 
+'Spine', 'Chest', 'Neck', 'Head', 'L_Thorax', 
+'L_Shoulder', 'L_Elbow', 'L_Wrist', 
+'L_Index1', 'L_Index2', 'L_Index3', 
+'L_Middle1', 'L_Middle2', 'L_Middle3', 
+'L_Pinky1', 'L_Pinky2', 'L_Pinky3', 
+'L_Ring1', 'L_Ring2', 'L_Ring3', 
+'L_Thumb1', 'L_Thumb2', 'L_Thumb3', 
+'R_Thorax', 'R_Shoulder', 'R_Elbow', 
+'R_Wrist', 
+'R_Index1', 'R_Index2', 'R_Index3',
+'R_Middle1', 'R_Middle2', 'R_Middle3', 
+'R_Pinky1', 'R_Pinky2', 'R_Pinky3', 
+'R_Ring1', 'R_Ring2', 'R_Ring3', 
+'R_Thumb1', 'R_Thumb2', 'R_Thumb3']
+"""

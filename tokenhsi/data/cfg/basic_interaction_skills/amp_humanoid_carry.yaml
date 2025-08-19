@@ -5,6 +5,7 @@ env:
   episodeLength: 600 # 20s
   isFlagrun: False
   enableDebugVis: False
+  numObs: 3198
   
   pdControl: True
   powerScale: 1.0
@@ -13,12 +14,15 @@ env:
   hybridInitProb: 0.5
   numAMPObsSteps: 10
 
+  
+  rolloutLength: 300
+
   localRootObs: True # amp disc obs
   localRootObsPolicy: False # policy obs
   rootHeightObs: False # amp disc obs
   rootHeightObsPolicy: False # policy obs
-  keyBodies: ["right_hand", "left_hand", "right_foot", "left_foot"]
-  contactBodies: ["right_foot", "left_foot"]
+  keyBodies: ["R_Wrist", "L_Wrist", "R_Toe", "L_Toe"]
+  contactBodies: ["R_Toe", "L_Toe"]
   terminationHeight: 0.15
   enableEarlyTermination: True
 
@@ -86,7 +90,8 @@ env:
 
   asset:
     assetRoot: "tokenhsi/data/assets"
-    assetFileName: "mjcf/phys_humanoid_v3.xml"
+    assetFileName: "mjcf/smplx_humanoid_fingers/omomo.xml"
+    #assetFileName: "mjcf/phys_humanoid_v3.xml"
 
   plane:
     staticFriction: 1.0

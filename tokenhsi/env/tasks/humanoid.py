@@ -52,6 +52,11 @@ class Humanoid(BaseTask):
         # device_id = 1
         # print("device id")
         # print(device_id)
+        self.FINGERS = []
+        for side in ("L_","R_"):
+            for base in ("Thumb","Index","Middle","Ring","Pinky"):
+                for i in range(3):
+                    self.FINGERS.append(f"{side}{base}{i+1}")
         
 
         self._pd_control = self.cfg["env"]["pdControl"]
@@ -68,6 +73,13 @@ class Humanoid(BaseTask):
         self._root_height_obs = self.cfg["env"].get("rootHeightObs", True)
         self._root_height_obs_policy = self.cfg["env"].get("rootHeightObsPolicy", True)
         self._enable_early_termination = self.cfg["env"]["enableEarlyTermination"]
+
+        self.device_type = cfg.get("device_type", "cuda")
+        self.device_id = cfg.get("device_id", 0)
+
+        self.device = "cpu"
+        if self.device_type == "cuda" or self.device_type == "GPU":
+            self.device = "cuda" + ":" + str(self.device_id)
         
         key_bodies = self.cfg["env"]["keyBodies"]
         self._setup_character_props(key_bodies)
@@ -226,6 +238,9 @@ class Humanoid(BaseTask):
         plane_params.restitution = self.plane_restitution
         self.gym.add_ground(self.sim, plane_params)
         return
+    
+    def is_finger_joint(self,name: str) -> bool:
+        return any(name.startswith(p) for p in self.FINGERS)
 
     def _setup_character_props(self, key_bodies):
         asset_file = self.cfg["env"]["asset"]["assetFileName"]
@@ -245,19 +260,17 @@ class Humanoid(BaseTask):
             self._num_actions = 28 + 2 * 2 #addint knees dim from 1 to 3
             self._num_actions_joint = self._num_actions
             self._num_obs = 1 + 15 * (3 + 6 + 3 + 3) - 3
+            
         
         elif asset_file == "mjcf/smplx_humanoid_fingers/omomo.xml":
+
             tree = SkeletonTree.from_mjcf(
                         "/mnt/data1/ryo/TokenHSI-ryo/tokenhsi/data/assets/mjcf/smplx_humanoid_fingers/omomo.xml"
                         )
             # 1) Actuate all non‐root joints:
             num_j = tree.num_joints  # from your Week 1 test
             one_dof = {
-                        "L_Elbow", "R_Elbow",
-                        "L_Wrist", "R_Wrist",
-                        # all the “1” finger joints:
-                        "L_Index1", "L_Middle1", "L_Ring1", "L_Pinky1", "L_Thumb1",
-                        "R_Index1", "R_Middle1", "R_Ring1", "R_Pinky1", "R_Thumb1",
+
                     }
             # skip the root (index 0)
             self._dof_body_ids = list(range(1, num_j))
@@ -280,6 +293,42 @@ class Humanoid(BaseTask):
 
             # 5) full‐state obs (same as before):
             self._num_obs = 1 + (num_j*(3+6+3+3)) - 3
+
+
+            # Joints used by AMP (exclude fingers)
+            self._amp_joint_ids = [
+                jid for jid in self._dof_body_ids
+                if not self.is_finger_joint(tree.node_names[jid])
+            ]
+
+            # Map each joint to its flat DOF indices in the full vector
+            full_ranges_per_joint = []
+            for jid, c in zip(self._dof_body_ids, dof_counts):
+                start = self._dof_offsets[self._dof_body_ids.index(jid)]
+                full_ranges_per_joint.append(list(range(start, start + c)))
+
+            # Keep only non-finger joints for AMP
+            amp_dof_index_list = []
+            self._amp_joint_ids = []
+            for jid, idxs in zip(self._dof_body_ids, full_ranges_per_joint):
+                name = tree.node_names[jid]
+                if not self.is_finger_joint(name):
+                    self._amp_joint_ids.append(jid)
+                    amp_dof_index_list.extend(idxs)
+
+            self._amp_dof_indices = torch.as_tensor(
+                amp_dof_index_list, dtype=torch.long, device=self.device
+            )
+            self.amp_num_dof = int(self._amp_dof_indices.numel())
+
+            self._amp_dof_body_ids = [1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13, 14]
+            self._amp_dof_offsets = [0, 3, 6, 9, 10, 13, 14, 17, 20, 23, 26, 29, 32]
+            self._amp_dof_obs_size = 72
+            self._amp_num_actions = 28 + 2 * 2 #addint knees dim from 1 to 3
+            self._amp_num_actions_joint = self._num_actions
+            self._amp_num_obs = 1 + 15 * (3 + 6 + 3 + 3) - 3
+
+            
         else:
             print(asset_file)
             print("Unsupported character config file: {s}".format(asset_file))
@@ -288,13 +337,7 @@ class Humanoid(BaseTask):
         return
 
     def _build_termination_heights(self):
-        head_term_height = 0.3
-
-        termination_height = self.cfg["env"]["terminationHeight"]
-        self._termination_heights = np.array([termination_height] * self.num_bodies)
-
-        head_id = self.gym.find_actor_rigid_body_handle(self.envs[0], self.humanoid_handles[0], "head")
-        self._termination_heights[head_id] = max(head_term_height, self._termination_heights[head_id])
+        self._termination_heights = 0.3
         self._termination_heights = to_torch(self._termination_heights, device=self.device)
         return
 
@@ -320,8 +363,8 @@ class Humanoid(BaseTask):
         motor_efforts = [prop.motor_effort for prop in actuator_props]
         
         # create force sensors at the feet
-        right_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "right_foot")
-        left_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "left_foot")
+        right_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "R_Toe")#right_foot
+        left_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "L_Toe")#left_foot
         sensor_pose = gymapi.Transform()
 
         self.gym.create_asset_force_sensor(humanoid_asset, right_foot_idx, sensor_pose)
@@ -660,6 +703,9 @@ def dof_to_obs(pose, dof_obs_size, dof_offsets):
             assert(False), "Unsupported joint type"
 
         joint_dof_obs = torch_utils.quat_to_tan_norm(joint_pose_q)
+        num1 = (j * joint_obs_size)
+        num2 = (j + 1) * joint_obs_size
+        temp = dof_obs[:, (j * joint_obs_size):((j + 1) * joint_obs_size)]
         dof_obs[:, (j * joint_obs_size):((j + 1) * joint_obs_size)] = joint_dof_obs
 
     assert((num_joints * joint_obs_size) == dof_obs_size)

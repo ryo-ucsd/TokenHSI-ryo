@@ -728,7 +728,7 @@ class HumanoidTrajSitCarryClimbPush(Humanoid):
         self._box_assets = self._load_box_asset(self._box_lib._box_size)
 
         self._box_handles_push = []
-        self._box_push_assets = self._load_box_asset(self._box_push_lib._box_size,density=10.0)
+        self._box_push_assets = self._load_box_asset(self._box_push_lib._box_size,density=1.0)
 
         if self._carry_reset_random_height:
             self._platform_handles = []
@@ -1110,14 +1110,16 @@ class HumanoidTrajSitCarryClimbPush(Humanoid):
 
         push_env_mask = self._task_indicator == HumanoidTrajSitCarryClimbPush.TaskUID["push"].value
         if push_env_mask.sum() > 0:
-            pass
-            #reward[push_env_mask] = compute_pushing_reward(
-                #     root_pos[push_env_mask],
-                #     push_box_pos[push_env_mask],
-                #     self._prev_push_box_pos[push_env_mask],
-                #     self._push_box_init_pos[push_env_mask],
-                #     self._push_box_states[push_env_mask, 3:7],
-                # )
+            reward[push_env_mask] = compute_pushing_reward(
+                box_pos = push_box_pos[push_env_mask],
+                prev_box_pos = self._prev_push_box_pos[push_env_mask],
+                dt = self.dt,
+                rigid_body_pos = self._rigid_body_pos[push_env_mask],
+                humanoid_root_states = self._humanoid_root_states,
+                tar_box_pos = torch.tensor([0,0,0]),
+                box_size = self._box_lib._box_size[push_env_mask, :],
+                init_box_pos=self._push_box_init_pos[push_env_mask, :]
+                )
         power = torch.abs(torch.multiply(self.dof_force_tensor, self._dof_vel)).sum(dim = -1)
         power_reward = -self._power_coefficient * power
 
@@ -2454,60 +2456,73 @@ def compute_sit_reward(root_pos, prev_root_pos, root_rot, prev_root_rot,
 
 @torch.jit.script
 def compute_pushing_reward(
-        root_pos,
         box_pos,
         prev_box_pos,
-        box_init_pos,
-        box_rot,
-        target_dir
+        dt,
+        rigid_body_pos,
+        humanoid_root_states,
+        tar_box_pos,
+        box_size,
+        init_box_pos
 ) :
-    """
-    + progress reward for moving box forward (+X)
-    + proximity reward for staying close enough to interact
-    – lateral drift penalty so the box stays in lane
-    – (optional) speed penalty to curb jitter
-    – (optional) rotation mis-alignment penalty
-    """
-    # ---------- distances ----------
-    # Horizontal (XY) vecs for convenience
-    box_xy  = box_pos[..., :2]
-    init_xy = box_init_pos[..., :2]
-    human_xy = root_pos[..., :2]
+    # type: (Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tensor
 
-    forward_delta = box_xy - init_xy                        # progress vector
-    forward_dist  = torch.dot(forward_delta, target_dir)    # signed scalar progress (+ is good)
+    box_vel = (box_pos - prev_box_pos) / dt  # Box velocity (m/s)
+    root_pos = humanoid_root_states[..., 0:3]
+    #right hand id = 5
+    #left hand id = 8
+    right_hand_pos = rigid_body_pos[..., 5, 0:3]
+    left_hand_pos = rigid_body_pos[..., 8, 0:3]
 
-    lateral_err = torch.sum((forward_delta - forward_dist.unsqueeze(-1) * target_dir)**2, dim=-1).sqrt()
+    tar_box_pos = init_box_pos
+    tar_box_pos[:,0] += 3.0
 
-    # ---------- rewards ----------
-    # 1. progress – use softplus so reward keeps growing but with diminishing returns
-    r_progress = torch.log1p(torch.relu(forward_dist))      # ≥ 0
+    right_hand_dist_xy = torch.norm(box_pos[:, :2] - right_hand_pos[:, :2], dim=1)
+    left_hand_dist_xy = torch.norm(box_pos[:, :2] - left_hand_pos[:, :2], dim=1)
 
-    # 2. stay within reach (≤ 1 m)
-    prox_err = torch.norm(human_xy - box_xy, dim=-1)
-    r_prox   = torch.exp(-2.0 * prox_err**2)
 
-    # 3. keep straight (penalty)
-    p_drift = -1.0 * torch.tanh(2.0 * lateral_err)
+    r_contant_rew = torch.exp(-0.5 * (right_hand_dist_xy - (box_size[:, 0] / 2)))
+    l_contant_rew = torch.exp(-0.5 * (left_hand_dist_xy - (box_size[:, 0] / 2)))
 
-    # 4. optional smooth-motion penalty
-    # box_vel_xy = (box_xy - prev_box_pos[..., :2]) / dt
 
-    # speed_pen  = -0.01 * torch.clamp(box_vel_xy.norm(dim=-1) - 1.0, min=0.0)
+    contact_rew = l_contant_rew + r_contant_rew
 
-    # 5. (optional) facing penalty
-    #    assume +X is “ideal”; convert quaternion → heading
-    # heading = torch_utils.calc_heading_quat(box_rot)    # returns quat facing world +X when heading=0
-    # facing_vec = quat_rotate(heading, torch.tensor([1.0, 0.0, 0.0], device=box_rot.device))
-    # cos_facing = facing_vec[..., 0]                     # dot with +X
-    # facing_pen = -0.1 * (1.0 - cos_facing)
 
-    # weight & combine
-    reward = (
-        0.5 * r_progress +
-        0.3 * r_prox     +
-        0.2 * p_drift    
+    vel       = (box_pos - prev_box_pos) / dt          # (N,3)
+
+    to_tar    = tar_box_pos.unsqueeze(0) - box_pos
+    dist      = torch.norm(to_tar, dim=-1)
+    unit_dir  = torch.where(dist.unsqueeze(-1) > 1e-6,
+                            to_tar / dist.unsqueeze(-1),
+                            torch.zeros_like(to_tar))
+    forward_v = torch.sum(vel * unit_dir, dim=-1)
+
+    push_rew  = 1.0 / (1.0 + dist) + forward_v
+    
+
+    # 3. Keep humanoid near the box (avoid hit-and-run)
+    human2box_dist = torch.norm(root_pos[..., :2] - box_pos[..., :2], dim=-1)
+    proximity_reward = torch.exp(-0.5 * human2box_dist)  # 1 if very close, decays with distance
+
+    # 4. Penalize excessive box velocity (avoid unrealistic hits)
+    box_speed = torch.norm(box_vel[..., :2], dim=-1)  # Only care about horizontal speed
+    vel_penalty = torch.where(
+        box_speed > 1.5,  # If box moves >2 m/s, penalize (adjust threshold)
+        (box_speed - 1.0) * 0.1,  # Scale penalty
+        torch.zeros_like(box_speed)
     )
+
+    speed_rew = torch.exp(-0.5 * (torch.abs(1.5 - box_speed)))
+
+    # Final reward (adjust weights as needed)
+    reward = (
+        0.7 * push_rew +      # Main push incentive
+        0.3 * contact_rew  # Keep touching the box with hands
+    )
+
+    # Store previous states
+    # self._prev_box_pos.copy_(box_pos)
+    # self._prev_root_pos.copy_(root_pos)
     return reward
 
 @torch.jit.script

@@ -58,6 +58,7 @@ if __name__ == '__main__':
                 raw_params = test_data[seq_to_id[seq_name]["id"]]
 
             poses = np.concatenate([raw_params["root_orient"], raw_params["pose_body"], np.zeros((raw_params["root_orient"].shape[0], 6))], axis=-1)
+            #stores the global translation
             trans = raw_params["trans"]
 
             required_params = {}
