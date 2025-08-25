@@ -248,16 +248,11 @@ class Humanoid(BaseTask):
         
         elif asset_file == "mjcf/smplx_humanoid_fingers/omomo.xml":
             tree = SkeletonTree.from_mjcf(
-                        "/mnt/data1/ryo/TokenHSI-ryo/tokenhsi/data/assets/mjcf/smplx_humanoid_fingers/omomo.xml"
+                        "./tokenhsi/data/assets/mjcf/smplx_humanoid_fingers/omomo.xml"
                         )
             # 1) Actuate all non‐root joints:
             num_j = tree.num_joints  # from your Week 1 test
             one_dof = {
-                        "L_Elbow", "R_Elbow",
-                        "L_Wrist", "R_Wrist",
-                        # all the “1” finger joints:
-                        "L_Index1", "L_Middle1", "L_Ring1", "L_Pinky1", "L_Thumb1",
-                        "R_Index1", "R_Middle1", "R_Ring1", "R_Pinky1", "R_Thumb1",
                     }
             # skip the root (index 0)
             self._dof_body_ids = list(range(1, num_j))
@@ -280,10 +275,6 @@ class Humanoid(BaseTask):
 
             # 5) full‐state obs (same as before):
             self._num_obs = 1 + (num_j*(3+6+3+3)) - 3
-        else:
-            print(asset_file)
-            print("Unsupported character config file: {s}".format(asset_file))
-            assert(False)
 
         return
 
